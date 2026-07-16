@@ -16,8 +16,10 @@ model, RAM range, PL011 discovery by `compatible`), enables the MMU
 with an identity map and data/instruction caches, then brings up a
 bitmap frame allocator over all of RAM and a first kernel heap
 (std.mem.Allocator-compatible). GICv2 and the virtual architectural
-timer are driven from the device tree: timer interrupts fire at 10 Hz
-through a full save/restore + eret path, and uptime ticks on serial.
+timer are driven from the device tree, and a round-robin scheduler
+preempts kernel threads on every 10 Hz tick — each thread runs on its
+own stack, can yield voluntarily via `svc #0`, and exits cleanly. Two
+demo workers print interleaved output to serial.
 
 ## Prerequisites
 
@@ -40,6 +42,8 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
 - `src/pmm.zig` — bitmap frame allocator (host-tested)
 - `src/mem.zig`, `src/heap.zig` — RAM bookkeeping and the kernel heap
 - `src/gic.zig`, `src/timer.zig` — GICv2 driver and the CNTV timer
+- `src/sched.zig` — round-robin scheduler; context switch = frame swap
+  on the exception return path
 - `src/main.zig` — kmain, panic handler, kprint/kprintf
 - `src/arch/aarch64.zig` — PL011 UART at its physical address, wfi halt
 - `src/console.zig`, `src/font8x8.zig` — framebuffer text console

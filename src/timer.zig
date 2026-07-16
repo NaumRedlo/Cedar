@@ -30,13 +30,15 @@ pub fn init(tick_hz: u64) void {
     log.kprintf("timer: cntfrq {d} Hz, tick every {d} counts ({d} Hz)\n", .{ freq, interval, tick_hz });
 }
 
+// Volatile read: ticks is written from interrupt context.
+pub fn now() u64 {
+    return @as(*volatile u64, &ticks).*;
+}
+
 pub fn onIrq() void {
     ticks += 1;
     asm volatile ("msr cntv_tval_el0, %[ival]"
         :
         : [ival] "r" (interval),
     );
-    if (ticks % hz == 0) {
-        log.kprintf("timer: uptime {d}s ({d} ticks)\n", .{ ticks / hz, ticks });
-    }
 }

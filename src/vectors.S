@@ -63,6 +63,10 @@ exception_vectors:
 .align 2
 exception_common:
     bl      handleException
+    // handleException returns the frame to resume (x0). Normally it is
+    // the same frame; on a context switch it belongs to another thread
+    // and lives on that thread's stack.
+    mov     sp, x0
     ldp     x0, x1,   [sp, #248]
     msr     elr_el1, x0
     msr     spsr_el1, x1

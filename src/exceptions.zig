@@ -2,6 +2,7 @@ const log = @import("log.zig");
 const arch = @import("arch.zig").impl;
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
+const sched = @import("sched.zig");
 
 extern var exception_vectors: u8;
 
@@ -66,25 +67,37 @@ fn ecName(ec: u64) []const u8 {
     };
 }
 
-// Called from vectors.S. Returning resumes the interrupted code via eret.
-export fn handleException(index: u64, frame: *Frame) callconv(.c) void {
+// Called from vectors.S with the saved frame. The returned frame is
+// what eret resumes — returning another thread's frame context-switches.
+export fn handleException(index: u64, frame: *Frame) callconv(.c) *Frame {
     switch (index & 15) {
-        1, 5 => dispatchIrq(),
+        1, 5 => return dispatchIrq(frame),
+        4 => {
+            // svc from kernel threads = voluntary yield
+            const esr = mrs("esr_el1");
+            if (((esr >> 26) & 0x3f) == 0x15) return sched.reschedule(frame);
+            fatal(index & 15, frame);
+        },
         else => fatal(index & 15, frame),
     }
 }
 
-fn dispatchIrq() void {
+fn dispatchIrq(frame: *Frame) *Frame {
+    var timer_fired = false;
     while (true) {
         const intid = gic.ack();
-        if (intid >= gic.SPURIOUS) return;
+        if (intid >= gic.SPURIOUS) break;
         if (intid == timer.INTID) {
             timer.onIrq();
+            timer_fired = true;
         } else {
             log.kprintf("irq: unexpected intid {d}\n", .{intid});
         }
         gic.eoi(intid);
     }
+    // Timer tick ends the current time slice (after EOI, so the next
+    // tick can fire even if we resume a different thread).
+    return if (timer_fired) sched.reschedule(frame) else frame;
 }
 
 fn fatal(index: u64, frame: *const Frame) noreturn {

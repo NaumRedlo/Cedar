@@ -9,6 +9,7 @@ const mem = @import("mem.zig");
 const heap = @import("heap.zig");
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
+const sched = @import("sched.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -21,6 +22,26 @@ fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
     kprint(msg);
     kprint("\n");
     arch.halt();
+}
+
+fn waitTicks(n: u64) void {
+    const until = timer.now() + n;
+    while (timer.now() < until) {}
+}
+
+fn workerA() callconv(.c) void {
+    for (0..5) |n| {
+        waitTicks(3);
+        kprintf("thread A: step {d}\n", .{n});
+    }
+}
+
+fn workerB() callconv(.c) void {
+    for (0..5) |n| {
+        waitTicks(3);
+        kprintf("thread B: step {d} (yielding)\n", .{n});
+        sched.yield();
+    }
 }
 
 // Entered from boot.S on core 0, stack ready, BSS cleared, MMU off.
@@ -89,8 +110,13 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
             gic.init(regs[0].addr, regs[1].addr);
             kprintf("gic: v2, distributor 0x{x}, cpu interface 0x{x}\n", .{ regs[0].addr, regs[1].addr });
             timer.init(10);
+            sched.init();
             arch.enableIrqs();
             kprint("irq: unmasked, ticking\n");
+
+            sched.spawn("A", workerA) catch |e| kprintf("spawn A failed: {s}\n", .{@errorName(e)});
+            sched.spawn("B", workerB) catch |e| kprintf("spawn B failed: {s}\n", .{@errorName(e)});
+            kprint("sched: workers A and B spawned, main becomes idle\n");
         } else {
             kprint("gic: no v2 controller in dtb, interrupts stay off\n");
         }
