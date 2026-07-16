@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const limine = @import("limine.zig");
+const console = @import("console.zig");
 
 const arch = switch (builtin.cpu.arch) {
     .aarch64 => @import("arch/aarch64.zig"),
@@ -11,9 +12,9 @@ pub const panic = std.debug.FullPanic(panicHandler);
 
 fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
     _ = first_trace_addr;
-    serialWrite("KERNEL PANIC: ");
-    serialWrite(msg);
-    serialWrite("\n");
+    kprint("KERNEL PANIC: ");
+    kprint(msg);
+    kprint("\n");
     arch.halt();
 }
 
@@ -24,30 +25,37 @@ fn serialWrite(s: []const u8) void {
     }
 }
 
-// Fill the screen with a green-tinted gradient as visible proof of life.
-fn paintFramebuffer() void {
-    const resp = limine.framebuffer_request.response orelse return;
-    if (resp.framebuffer_count < 1) return;
-    const fb = resp.framebuffers.?[0];
-    if (fb.bpp != 32) return;
+// Console first: the framebuffer is the guaranteed output channel, so a
+// faulting serial write can never hide text that was already printable.
+fn kprint(s: []const u8) void {
+    console.write(s);
+    serialWrite(s);
+}
 
-    const pixels: [*]volatile u32 = @alignCast(@ptrCast(fb.address));
-    const words_per_row = fb.pitch / 4;
-    for (0..fb.height) |y| {
-        const row = pixels + y * words_per_row;
-        for (0..fb.width) |x| {
-            const g: u32 = @intCast(64 + (x * 191) / fb.width);
-            const b: u32 = @intCast((y * 127) / fb.height);
-            row[x] = (0x22 << 16) | (g << 8) | b;
-        }
-    }
+var fmt_buf: [256]u8 = undefined;
+
+fn kprintf(comptime fmt: []const u8, args: anytype) void {
+    const s = std.fmt.bufPrint(&fmt_buf, fmt, args) catch return;
+    kprint(s);
 }
 
 export fn kmain() callconv(.c) noreturn {
     if (!limine.baseRevisionSupported()) arch.halt();
 
     arch.init();
-    paintFramebuffer();
-    serialWrite("Hello, Cedar!\n");
+    _ = console.init();
+
+    kprint("Hello, Cedar!\n\n");
+
+    if (limine.framebuffer_request.response) |resp| {
+        if (resp.framebuffer_count >= 1) {
+            const fb = resp.framebuffers.?[0];
+            kprintf("framebuffer: {d}x{d}, {d} bpp\n", .{ fb.width, fb.height, fb.bpp });
+        }
+    }
+    if (limine.hhdm_request.response) |hhdm| {
+        kprintf("hhdm offset: 0x{x}\n", .{hhdm.offset});
+    }
+
     arch.halt();
 }
