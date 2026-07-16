@@ -12,7 +12,7 @@ pub const Frame = extern struct {
     x: [31]u64,
     elr: u64,
     spsr: u64,
-    _pad: u64 = 0,
+    sp_el0: u64 = 0,
 };
 
 pub fn install() void {
@@ -68,16 +68,28 @@ fn ecName(ec: u64) []const u8 {
     };
 }
 
+const syscall = @import("syscall.zig");
+
 // Called from vectors.S with the saved frame. The returned frame is
 // what eret resumes — returning another thread's frame context-switches.
 export fn handleException(index: u64, frame: *Frame) callconv(.c) *Frame {
     switch (index & 15) {
-        1, 5 => return dispatchIrq(frame),
+        1, 5, 9 => return dispatchIrq(frame),
         4 => {
             // svc from kernel threads = voluntary yield
             const esr = mrs("esr_el1");
             if (((esr >> 26) & 0x3f) == 0x15) return sched.reschedule(frame);
             fatal(index & 15, frame);
+        },
+        8 => {
+            // sync from EL0: either a syscall or a dying process
+            const esr = mrs("esr_el1");
+            const ec = (esr >> 26) & 0x3f;
+            if (ec == 0x15) return syscall.dispatch(frame);
+            log.kprintf("\nprocess fault at EL0: {s} (EC=0x{x:0>2}) elr=0x{x} far=0x{x}\n", .{
+                ecName(ec), ec, frame.elr, mrs("far_el1"),
+            });
+            return sched.killCurrent(frame, "hardware fault");
         },
         else => fatal(index & 15, frame),
     }

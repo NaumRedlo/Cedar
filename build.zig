@@ -57,6 +57,30 @@ pub fn build(b: *std.Build) void {
     kernel.pie = false;
     b.installArtifact(kernel);
 
+    // Userland programs: freestanding EL0 flat binaries, embedded into
+    // the kernel and installed into /Programs at boot.
+    const wf = b.addWriteFiles();
+    var embed_source: []const u8 = "";
+    for ([_][]const u8{ "hello", "crash" }) |prog| {
+        const exe = b.addExecutable(.{
+            .name = prog,
+            .use_llvm = true,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(b.fmt("userland/{s}.zig", .{prog})),
+                .target = target,
+                .optimize = .ReleaseSmall,
+            }),
+        });
+        exe.setLinkerScript(b.path("userland/user.ld"));
+        exe.entry = .{ .symbol_name = "_start" };
+        exe.pie = false;
+        const bin = exe.addObjCopy(.{ .format = .bin });
+        _ = wf.addCopyFile(bin.getOutput(), b.fmt("{s}.bin", .{prog}));
+        embed_source = b.fmt("{s}pub const {s} = @embedFile(\"{s}.bin\");\n", .{ embed_source, prog, prog });
+    }
+    const embed_file = wf.add("userprogs.zig", embed_source);
+    kernel.root_module.addAnonymousImport("userprogs", .{ .root_source_file = embed_file });
+
     // Strip the ELF container down to the raw bytes QEMU/RPi firmware load.
     const image = kernel.addObjCopy(.{ .format = .bin });
     const install_image = b.addInstallBinFile(image.getOutput(), "cedar.img");

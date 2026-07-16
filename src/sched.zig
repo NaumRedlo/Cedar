@@ -31,6 +31,7 @@ pub const Thread = struct {
     stack_base: u64 = 0,
     wake_at: u64 = 0, // tick deadline while .sleeping
     wait_token: usize = 0, // what we're blocked on while .blocked
+    ttbr0: ?u64 = null, // user page table root; null = pure kernel thread
 };
 
 var threads: [MAX_THREADS]Thread = @splat(.{});
@@ -46,26 +47,40 @@ pub fn init() void {
 
 pub const SpawnError = error{ NoSlot, NoMemory };
 
-pub fn spawn(name: []const u8, entry: *const fn () callconv(.c) void) SpawnError!void {
+// SPSR for a fresh EL0 process: EL0t, IRQs enabled, D/A/F masked.
+const USER_SPSR: u64 = 0x340;
+
+fn allocSlot(name: []const u8) SpawnError!struct { slot: usize, kstack_top: u64 } {
     const slot = for (&threads, 0..) |*t, i| {
         if (t.state == .unused) break i;
     } else return error.NoSlot;
 
     const stack_base = mem.frames.allocContiguous(STACK_PAGES) orelse return error.NoMemory;
     const stack_top = mmu.p2v(stack_base + STACK_PAGES * mem.PAGE_SIZE);
+    threads[slot] = .{ .state = .ready, .name = name, .stack_base = stack_base };
+    return .{ .slot = slot, .kstack_top = stack_top };
+}
+
+pub fn spawn(name: []const u8, entry: *const fn () callconv(.c) void) SpawnError!void {
+    const s = try allocSlot(name);
 
     // Fabricate the frame eret will consume: entry point in ELR, thread
     // exit as the return address, sp ends up at stack_top after restore.
-    const frame: *Frame = @ptrFromInt(stack_top - @sizeOf(Frame));
+    const frame: *Frame = @ptrFromInt(s.kstack_top - @sizeOf(Frame));
     frame.* = .{ .x = @splat(0), .elr = @intFromPtr(entry), .spsr = INITIAL_SPSR };
     frame.x[30] = @intFromPtr(&threadExit);
+    threads[s.slot].context = frame;
+}
 
-    threads[slot] = .{
-        .state = .ready,
-        .context = frame,
-        .name = name,
-        .stack_base = stack_base,
-    };
+// A process: erets to EL0 at entry_va on its own TTBR0 table; exceptions
+// from EL0 land on the thread's kernel stack (SP_EL1 = kstack top).
+pub fn spawnUser(name: []const u8, ttbr0: u64, entry_va: u64, user_sp: u64) SpawnError!void {
+    const s = try allocSlot(name);
+
+    const frame: *Frame = @ptrFromInt(s.kstack_top - @sizeOf(Frame));
+    frame.* = .{ .x = @splat(0), .elr = entry_va, .spsr = USER_SPSR, .sp_el0 = user_sp };
+    threads[s.slot].context = frame;
+    threads[s.slot].ttbr0 = ttbr0;
 }
 
 fn threadExit() callconv(.c) noreturn {
@@ -121,6 +136,35 @@ fn wakeExpired() void {
     }
 }
 
+// --- helpers for exception-context callers (syscalls, faults) ---
+
+pub fn killCurrent(frame: *Frame, reason: []const u8) *Frame {
+    log.kprintf("sched: '{s}' killed ({s})\n", .{ threads[current].name, reason });
+    threads[current].state = .finished;
+    return reschedule(frame);
+}
+
+pub fn exitInHandler(frame: *Frame, code: u64) *Frame {
+    log.kprintf("sched: '{s}' exited (code {d})\n", .{ threads[current].name, code });
+    threads[current].state = .finished;
+    return reschedule(frame);
+}
+
+pub fn sleepInHandler(frame: *Frame, ticks_n: u64) *Frame {
+    threads[current].state = .sleeping;
+    threads[current].wake_at = timer.now() + ticks_n;
+    return reschedule(frame);
+}
+
+pub fn ps() void {
+    for (&threads, 0..) |*t, i| {
+        if (t.state == .unused) continue;
+        log.kprintf("  {d}  {s: <12} {s}{s}\n", .{
+            i, t.name, @tagName(t.state), if (t.ttbr0 != null) @as([]const u8, "  [user]") else "",
+        });
+    }
+}
+
 // Called from exception context (timer tick or svc). Saves the
 // interrupted thread's frame and picks the next ready one.
 pub fn reschedule(frame: *Frame) *Frame {
@@ -137,9 +181,35 @@ pub fn reschedule(frame: *Frame) *Frame {
         if (threads[i].state == .ready) {
             current = i;
             threads[i].state = .running;
+            switchUserTable(threads[i].ttbr0);
             return threads[i].context;
         }
         i = (i + 1) % MAX_THREADS;
     }
     @panic("scheduler: no runnable threads");
+}
+
+// Point TTBR0 at the next process's table. Kernel threads keep whatever
+// table is loaded — they never touch low addresses. No ASIDs yet, so a
+// switch pays a full TLB flush.
+var hw_ttbr0: u64 = mmu.BOOT_TABLE_PHYS;
+var kernel_low: u64 = mmu.BOOT_TABLE_PHYS;
+
+pub fn setKernelLowTable(phys: u64) void {
+    kernel_low = phys;
+    hw_ttbr0 = phys;
+}
+
+fn switchUserTable(table: ?u64) void {
+    const t = table orelse kernel_low;
+    if (t == hw_ttbr0) return;
+    hw_ttbr0 = t;
+    asm volatile (
+        \\msr ttbr0_el1, %[t]
+        \\tlbi vmalle1
+        \\dsb nsh
+        \\isb
+        :
+        : [t] "r" (t),
+    );
 }

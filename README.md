@@ -25,8 +25,11 @@ preempts kernel threads on every 10 Hz tick — each thread runs on its
 own stack, can yield via `svc #0`, `sleep()` until a tick deadline, or
 block on a counting semaphore, all without burning CPU. On top of that:
 a ramfb framebuffer console (all kernel output mirrors to the screen),
-keyboard input over the PL011 RX interrupt, and an interactive shell —
-`help`, `about`, `uptime`, `mem`, `clear` at the `cedar>` prompt.
+keyboard input over the PL011 RX interrupt, an interactive shell, Cedar
+FS (in-RAM, case-insensitive/case-preserving, /System /Programs /Home),
+and **userspace**: `run /Programs/hello` loads a flat binary from the
+FS into its own EL0 address space with write/sleep/exit/ticks syscalls.
+A faulting process is killed with a diagnostic; the kernel survives.
 
 ## Prerequisites
 
@@ -59,6 +62,9 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
   display it configures
 - `src/console.zig`, `src/font8x8.zig` — framebuffer text console
 - `src/input.zig`, `src/shell.zig` — UART RX ring + the `cedar>` shell
+- `src/fs.zig` — Cedar FS, the in-RAM tree (host-tested)
+- `src/user.zig`, `src/syscall.zig` — EL0 address spaces and syscalls
+- `userland/` — user programs, built as flat binaries by the same build
 - `linker-aarch64.ld` — `.boot` at physical 0x40080000, the rest at
   HHDM + physical with matching load addresses for the flat image
 

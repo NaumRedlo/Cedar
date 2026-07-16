@@ -10,7 +10,7 @@
 //   [240]      x30
 //   [248]      elr_el1
 //   [256]      spsr_el1
-//   [264]      pad
+//   [264]      sp_el0 (user stack pointer, live once EL0 exists)
 
 .macro ventry index
 .align 7
@@ -34,6 +34,8 @@
     mrs     x0, elr_el1
     mrs     x1, spsr_el1
     stp     x0, x1,   [sp, #248]
+    mrs     x0, sp_el0
+    str     x0,       [sp, #264]
     mov     x0, #\index
     mov     x1, sp
     b       exception_common
@@ -70,6 +72,8 @@ exception_common:
     ldp     x0, x1,   [sp, #248]
     msr     elr_el1, x0
     msr     spsr_el1, x1
+    ldr     x0,       [sp, #264]
+    msr     sp_el0, x0
     ldp     x0, x1,   [sp, #16*0]
     ldp     x2, x3,   [sp, #16*1]
     ldp     x4, x5,   [sp, #16*2]

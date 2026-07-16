@@ -16,6 +16,8 @@ const console = @import("console.zig");
 const input = @import("input.zig");
 const shell = @import("shell.zig");
 const fs = @import("fs.zig");
+const user = @import("user.zig");
+const userprogs = @import("userprogs");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -45,6 +47,8 @@ fn initFs() void {
             _ = try fs.global.mkdir("/Home");
             try fs.global.write("/System/version.txt", "Cedar 0.1 (aarch64)\nno bootloader, no mercy\n");
             try fs.global.write("/Home/welcome.txt", "Welcome home.\nThis file lives in RAM and in the moment.\n");
+            try fs.global.write("/Programs/hello", userprogs.hello);
+            try fs.global.write("/Programs/crash", userprogs.crash);
         }
     };
     boot.run() catch {
@@ -106,6 +110,12 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
                 initFs();
             } else {
                 kprint("heap: init failed\n");
+            }
+
+            if (user.init()) {
+                kprint("user: EL0 ready, low half handed to processes\n");
+            } else {
+                kprint("user: init failed\n");
             }
         }
     }
