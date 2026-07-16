@@ -10,6 +10,7 @@ const heap = @import("heap.zig");
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
 const sched = @import("sched.zig");
+const sync = @import("sync.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -24,23 +25,20 @@ fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
     arch.halt();
 }
 
-fn waitTicks(n: u64) void {
-    const until = timer.now() + n;
-    while (timer.now() < until) {}
-}
+var items = sync.Semaphore{};
 
-fn workerA() callconv(.c) void {
+fn producer() callconv(.c) void {
     for (0..5) |n| {
-        waitTicks(3);
-        kprintf("thread A: step {d}\n", .{n});
+        sched.sleep(5);
+        items.signal();
+        kprintf("producer: item {d} ready at tick {d}\n", .{ n, timer.now() });
     }
 }
 
-fn workerB() callconv(.c) void {
+fn consumer() callconv(.c) void {
     for (0..5) |n| {
-        waitTicks(3);
-        kprintf("thread B: step {d} (yielding)\n", .{n});
-        sched.yield();
+        items.wait();
+        kprintf("consumer: got item {d} at tick {d}\n", .{ n, timer.now() });
     }
 }
 
@@ -114,9 +112,9 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
             arch.enableIrqs();
             kprint("irq: unmasked, ticking\n");
 
-            sched.spawn("A", workerA) catch |e| kprintf("spawn A failed: {s}\n", .{@errorName(e)});
-            sched.spawn("B", workerB) catch |e| kprintf("spawn B failed: {s}\n", .{@errorName(e)});
-            kprint("sched: workers A and B spawned, main becomes idle\n");
+            sched.spawn("producer", producer) catch |e| kprintf("spawn failed: {s}\n", .{@errorName(e)});
+            sched.spawn("consumer", consumer) catch |e| kprintf("spawn failed: {s}\n", .{@errorName(e)});
+            kprint("sched: producer sleeps 5 ticks per item, consumer blocks on a semaphore\n");
         } else {
             kprint("gic: no v2 controller in dtb, interrupts stay off\n");
         }

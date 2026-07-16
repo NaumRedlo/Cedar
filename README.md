@@ -18,8 +18,9 @@ bitmap frame allocator over all of RAM and a first kernel heap
 (std.mem.Allocator-compatible). GICv2 and the virtual architectural
 timer are driven from the device tree, and a round-robin scheduler
 preempts kernel threads on every 10 Hz tick — each thread runs on its
-own stack, can yield voluntarily via `svc #0`, and exits cleanly. Two
-demo workers print interleaved output to serial.
+own stack, can yield via `svc #0`, `sleep()` until a tick deadline, or
+block on a counting semaphore, all without burning CPU. The demo is a
+producer/consumer pair whose tick stamps line up exactly.
 
 ## Prerequisites
 
@@ -43,7 +44,8 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
 - `src/mem.zig`, `src/heap.zig` — RAM bookkeeping and the kernel heap
 - `src/gic.zig`, `src/timer.zig` — GICv2 driver and the CNTV timer
 - `src/sched.zig` — round-robin scheduler; context switch = frame swap
-  on the exception return path
+  on the exception return path; sleep/block/wake states
+- `src/sync.zig` — counting semaphore over the scheduler's block/wake
 - `src/main.zig` — kmain, panic handler, kprint/kprintf
 - `src/arch/aarch64.zig` — PL011 UART at its physical address, wfi halt
 - `src/console.zig`, `src/font8x8.zig` — framebuffer text console

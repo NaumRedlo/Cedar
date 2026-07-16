@@ -32,6 +32,22 @@ pub fn enableIrqs() void {
     asm volatile ("msr daifclr, #2");
 }
 
+// Mask IRQs, returning the previous DAIF state for irqRestore.
+pub fn irqSave() u64 {
+    const daif = asm volatile ("mrs %[out], daif"
+        : [out] "=r" (-> u64),
+    );
+    asm volatile ("msr daifset, #2");
+    return daif;
+}
+
+pub fn irqRestore(daif: u64) void {
+    asm volatile ("msr daif, %[v]"
+        :
+        : [v] "r" (daif),
+    );
+}
+
 pub fn currentEl() u64 {
     const el = asm volatile ("mrs %[out], currentel"
         : [out] "=r" (-> u64),
