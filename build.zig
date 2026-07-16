@@ -78,7 +78,7 @@ pub fn build(b: *std.Build) void {
     // Pure-logic modules (DTB parser, frame allocator) are unit-tested
     // on the host.
     const test_step = b.step("test", "Run host unit tests");
-    for ([_][]const u8{ "src/dtb.zig", "src/pmm.zig" }) |file| {
+    for ([_][]const u8{ "src/dtb.zig", "src/pmm.zig", "src/fs.zig" }) |file| {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path(file),

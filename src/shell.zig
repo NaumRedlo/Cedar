@@ -7,6 +7,7 @@ const input = @import("input.zig");
 const timer = @import("timer.zig");
 const mem = @import("mem.zig");
 const console = @import("console.zig");
+const fs = @import("fs.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -18,7 +19,7 @@ pub fn run() callconv(.c) void {
     while (true) {
         kprint("cedar> ");
         const line = readLine(&buf);
-        execute(std.mem.trim(u8, line, " \t"));
+        execute(line);
     }
 }
 
@@ -48,10 +49,13 @@ fn readLine(buf: []u8) []u8 {
     }
 }
 
-fn execute(cmd: []const u8) void {
-    if (cmd.len == 0) return;
+fn execute(line: []const u8) void {
+    var it = std.mem.tokenizeScalar(u8, line, ' ');
+    const cmd = it.next() orelse return;
+
     if (std.mem.eql(u8, cmd, "help")) {
-        kprint("commands: help, about, uptime, mem, clear\n");
+        kprint("system: help, about, uptime, mem, clear\n");
+        kprint("files:  ls [path], cat <path>, write <path> <text>, mkdir <path>, rm <path>\n");
     } else if (std.mem.eql(u8, cmd, "about")) {
         kprint("Cedar — an ARM-only hobby kernel in Zig. No bootloader, no mercy.\n");
     } else if (std.mem.eql(u8, cmd, "uptime")) {
@@ -61,7 +65,62 @@ fn execute(cmd: []const u8) void {
         kprintf("{d} MiB free of {d} MiB\n", .{ mem.freeMiB(), mem.totalMiB() });
     } else if (std.mem.eql(u8, cmd, "clear")) {
         console.clear();
+    } else if (std.mem.eql(u8, cmd, "ls")) {
+        cmdLs(it.next() orelse "/");
+    } else if (std.mem.eql(u8, cmd, "cat")) {
+        cmdCat(it.next() orelse return kprint("usage: cat <path>\n"));
+    } else if (std.mem.eql(u8, cmd, "mkdir")) {
+        cmdMkdir(it.next() orelse return kprint("usage: mkdir <path>\n"));
+    } else if (std.mem.eql(u8, cmd, "rm")) {
+        cmdRm(it.next() orelse return kprint("usage: rm <path>\n"));
+    } else if (std.mem.eql(u8, cmd, "write")) {
+        const path = it.next() orelse return kprint("usage: write <path> <text>\n");
+        cmdWrite(path, std.mem.trimStart(u8, it.rest(), " "));
     } else {
         kprintf("unknown command: '{s}' (try 'help')\n", .{cmd});
     }
+}
+
+fn fsReady() bool {
+    if (!fs.ready) kprint("fs: not initialised\n");
+    return fs.ready;
+}
+
+fn cmdLs(path: []const u8) void {
+    if (!fsReady()) return;
+    const node = fs.global.lookup(path) orelse return kprintf("ls: no such path: {s}\n", .{path});
+    if (node.kind == .file) {
+        kprintf("{d:>8}  {s}\n", .{ node.size(), node.name });
+        return;
+    }
+    if (node.children.items.len == 0) return kprint("(empty)\n");
+    for (node.children.items) |c| {
+        switch (c.kind) {
+            .dir => kprintf("     dir  {s}/  ({d} items)\n", .{ c.name, c.size() }),
+            .file => kprintf("{d:>8}  {s}\n", .{ c.size(), c.name }),
+        }
+    }
+}
+
+fn cmdCat(path: []const u8) void {
+    if (!fsReady()) return;
+    const bytes = fs.global.read(path) catch |e| return kprintf("cat: {s}: {s}\n", .{ path, @errorName(e) });
+    kprint(bytes);
+    if (bytes.len > 0 and bytes[bytes.len - 1] != '\n') kprint("\n");
+}
+
+fn cmdMkdir(path: []const u8) void {
+    if (!fsReady()) return;
+    _ = fs.global.mkdir(path) catch |e| return kprintf("mkdir: {s}: {s}\n", .{ path, @errorName(e) });
+}
+
+fn cmdRm(path: []const u8) void {
+    if (!fsReady()) return;
+    fs.global.remove(path) catch |e| return kprintf("rm: {s}: {s}\n", .{ path, @errorName(e) });
+}
+
+fn cmdWrite(path: []const u8, text: []const u8) void {
+    if (!fsReady()) return;
+    fs.global.write(path, text) catch |e| return kprintf("write: {s}: {s}\n", .{ path, @errorName(e) });
+    kprintf("{d} bytes -> {s}\n", .{ text.len, path });
 }

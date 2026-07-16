@@ -15,6 +15,7 @@ const ramfb = @import("ramfb.zig");
 const console = @import("console.zig");
 const input = @import("input.zig");
 const shell = @import("shell.zig");
+const fs = @import("fs.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -27,6 +28,30 @@ fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
     kprint(msg);
     kprint("\n");
     arch.halt();
+}
+
+fn initFs() void {
+    fs.global = fs.Fs.init(heap.allocator()) catch {
+        kprint("fs: init failed\n");
+        return;
+    };
+    fs.global.clock = &timer.now;
+    fs.ready = true;
+
+    const boot = struct {
+        fn run() !void {
+            _ = try fs.global.mkdir("/System");
+            _ = try fs.global.mkdir("/Programs");
+            _ = try fs.global.mkdir("/Home");
+            try fs.global.write("/System/version.txt", "Cedar 0.1 (aarch64)\nno bootloader, no mercy\n");
+            try fs.global.write("/Home/welcome.txt", "Welcome home.\nThis file lives in RAM and in the moment.\n");
+        }
+    };
+    boot.run() catch {
+        kprint("fs: bootstrap failed\n");
+        return;
+    };
+    kprint("fs: Cedar FS mounted at / (RAM, case-insensitive)\n");
 }
 
 
@@ -76,12 +101,9 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
             kprintf("pmm: test frame at 0x{x}, freeing it back\n", .{f});
             mem.frames.free(f);
 
-            if (heap.init(256)) {
-                var list: std.ArrayList(u8) = .empty;
-                const a = heap.allocator();
-                defer list.deinit(a);
-                list.appendSlice(a, "heap: 1 MiB online, ArrayList works\n") catch {};
-                kprint(list.items);
+            if (heap.init(1024)) {
+                kprint("heap: 4 MiB online\n");
+                initFs();
             } else {
                 kprint("heap: init failed\n");
             }
