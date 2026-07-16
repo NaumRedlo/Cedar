@@ -17,6 +17,10 @@ fn be32(bytes: []const u8, off: usize) u32 {
     return std.mem.readInt(u32, bytes[off..][0..4], .big);
 }
 
+fn be64(bytes: []const u8, off: usize) u64 {
+    return std.mem.readInt(u64, bytes[off..][0..8], .big);
+}
+
 fn alignUp4(x: usize) usize {
     return (x + 3) & ~@as(usize, 3);
 }
@@ -73,6 +77,12 @@ pub const Dtb = struct {
 
     pub fn iterator(self: *const Dtb) Iterator {
         return .{ .dtb = self };
+    }
+
+    // Memory reservation block: (address, size) pairs the kernel must
+    // never hand out, terminated by a zero pair.
+    pub fn reservations(self: *const Dtb) ReservationIterator {
+        return .{ .raw = self.raw, .off = be32(self.raw, 16) };
     }
 
     // Value of a property that sits directly on the root node.
@@ -165,6 +175,20 @@ pub const Dtb = struct {
     }
 };
 
+pub const ReservationIterator = struct {
+    raw: []const u8,
+    off: usize,
+
+    pub fn next(it: *ReservationIterator) ?Reg {
+        if (it.off + 16 > it.raw.len) return null;
+        const addr = be64(it.raw, it.off);
+        const size = be64(it.raw, it.off + 8);
+        it.off += 16;
+        if (addr == 0 and size == 0) return null;
+        return .{ .addr = addr, .size = size };
+    }
+};
+
 pub const Iterator = struct {
     dtb: *const Dtb,
     off: usize = 0,
@@ -248,6 +272,15 @@ test "second compatible entry in list matches" {
     const dt = fixture();
     const node = dt.findByCompatible("arm,primecell") orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(u64, 0x9000000), node.addr);
+}
+
+test "memory reservation block" {
+    const dt = fixture();
+    var it = dt.reservations();
+    const r = it.next() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, 0x47000000), r.addr);
+    try testing.expectEqual(@as(u64, 0x10000), r.size);
+    try testing.expect(it.next() == null);
 }
 
 test "bad magic rejected" {

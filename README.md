@@ -12,8 +12,10 @@ and none is planned.
 
 Current state (verified in QEMU): boots at EL1, installs exception
 vectors with a full register dump, parses the device tree (machine
-model, RAM range, PL011 discovery by `compatible`), then enables the
-MMU with an identity map and data/instruction caches.
+model, RAM range, PL011 discovery by `compatible`), enables the MMU
+with an identity map and data/instruction caches, then brings up a
+bitmap frame allocator over all of RAM and a first kernel heap
+(std.mem.Allocator-compatible).
 
 ## Prerequisites
 
@@ -33,6 +35,8 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
 - `src/vectors.S`, `src/exceptions.zig` — VBAR_EL1 table, ESR decode, dump
 - `src/dtb.zig` — flattened device tree parser (host-tested: `zig build test`)
 - `src/mmu.zig` — stage-1 identity map (1 GiB blocks), MAIR/TCR, caches
+- `src/pmm.zig` — bitmap frame allocator (host-tested)
+- `src/mem.zig`, `src/heap.zig` — RAM bookkeeping and the kernel heap
 - `src/main.zig` — kmain, panic handler, kprint/kprintf
 - `src/arch/aarch64.zig` — PL011 UART at its physical address, wfi halt
 - `src/console.zig`, `src/font8x8.zig` — framebuffer text console
