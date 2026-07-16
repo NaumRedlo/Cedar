@@ -9,6 +9,11 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
+    const test_exception = b.option(
+        bool,
+        "test-exception",
+        "Execute brk #0 after boot to exercise the exception path",
+    ) orelse false;
 
     // Bare-metal target: no OS, no FP/SIMD so the kernel never touches
     // vector state (interrupt handlers won't have to save it).
@@ -35,7 +40,12 @@ pub fn build(b: *std.Build) void {
             .code_model = .small,
         }),
     });
+    const options = b.addOptions();
+    options.addOption(bool, "test_exception", test_exception);
+    kernel.root_module.addOptions("build_options", options);
+
     kernel.root_module.addAssemblyFile(b.path("src/boot.S"));
+    kernel.root_module.addAssemblyFile(b.path("src/vectors.S"));
     kernel.setLinkerScript(b.path("linker-aarch64.ld"));
     kernel.entry = .{ .symbol_name = "_start" };
     kernel.pie = false;
