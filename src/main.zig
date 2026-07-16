@@ -7,6 +7,8 @@ const dtb = @import("dtb.zig");
 const mmu = @import("mmu.zig");
 const mem = @import("mem.zig");
 const heap = @import("heap.zig");
+const gic = @import("gic.zig");
+const timer = @import("timer.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -78,6 +80,19 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
             } else {
                 kprint("heap: init failed\n");
             }
+        }
+    }
+
+    if (dt_store) |*dt| {
+        var regs: [2]dtb.Reg = undefined;
+        if (dt.findRegsByCompatible("arm,cortex-a15-gic", &regs) >= 2) {
+            gic.init(regs[0].addr, regs[1].addr);
+            kprintf("gic: v2, distributor 0x{x}, cpu interface 0x{x}\n", .{ regs[0].addr, regs[1].addr });
+            timer.init(10);
+            arch.enableIrqs();
+            kprint("irq: unmasked, ticking\n");
+        } else {
+            kprint("gic: no v2 controller in dtb, interrupts stay off\n");
         }
     }
 

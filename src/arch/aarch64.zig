@@ -28,6 +28,10 @@ pub fn serialWriteByte(byte: u8) void {
     uart()[0] = byte; // UARTDR
 }
 
+pub fn enableIrqs() void {
+    asm volatile ("msr daifclr, #2");
+}
+
 pub fn currentEl() u64 {
     const el = asm volatile ("mrs %[out], currentel"
         : [out] "=r" (-> u64),

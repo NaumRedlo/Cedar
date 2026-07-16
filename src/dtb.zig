@@ -131,15 +131,32 @@ pub const Dtb = struct {
 
     // First node at root level whose name starts with the given prefix.
     pub fn findByNodePrefix(self: *const Dtb, prefix: []const u8) ?Reg {
-        return self.scan(prefix, false);
+        const value = self.scan(prefix, false) orelse return null;
+        return self.parseReg(value);
     }
 
     // First node whose "compatible" list contains the given string.
     pub fn findByCompatible(self: *const Dtb, compat: []const u8) ?Reg {
-        return self.scan(compat, true);
+        const value = self.scan(compat, true) orelse return null;
+        return self.parseReg(value);
     }
 
-    fn scan(self: *const Dtb, needle: []const u8, by_compatible: bool) ?Reg {
+    // Same, but fills `out` with consecutive (addr, size) pairs from the
+    // node's reg property (e.g. GIC distributor + cpu interface).
+    pub fn findRegsByCompatible(self: *const Dtb, compat: []const u8, out: []Reg) usize {
+        const value = self.scan(compat, true) orelse return 0;
+        const addr_cells = self.rootCells("#address-cells", 2);
+        const size_cells = self.rootCells("#size-cells", 1);
+        if (addr_cells > 2 or size_cells > 2) return 0;
+        const stride = (addr_cells + size_cells) * 4;
+        var n: usize = 0;
+        while (n < out.len and (n + 1) * stride <= value.len) : (n += 1) {
+            out[n] = self.parseReg(value[n * stride ..]) orelse break;
+        }
+        return n;
+    }
+
+    fn scan(self: *const Dtb, needle: []const u8, by_compatible: bool) ?[]const u8 {
         var it = self.iterator();
         var matched = false;
         var reg_value: ?[]const u8 = null;
@@ -150,12 +167,12 @@ pub const Dtb = struct {
                 .begin_node => |name| {
                     // Properties always precede subnodes, so the previous
                     // node is fully described once a child (or end) shows up.
-                    if (matched) if (reg_value) |rv| return self.parseReg(rv);
+                    if (matched) if (reg_value) |rv| return rv;
                     matched = !by_compatible and std.mem.startsWith(u8, name, needle);
                     reg_value = null;
                 },
                 .end_node => {
-                    if (matched) if (reg_value) |rv| return self.parseReg(rv);
+                    if (matched) if (reg_value) |rv| return rv;
                     matched = false;
                     reg_value = null;
                 },
@@ -266,6 +283,16 @@ test "compatible miss returns null" {
     const dt = fixture();
     try testing.expect(dt.findByCompatible("brcm,bcm2711") == null);
     try testing.expect(dt.findByNodePrefix("nonexistent") == null);
+}
+
+test "multiple reg pairs (gic dist + cpu iface)" {
+    const dt = fixture();
+    var regs: [4]Reg = undefined;
+    const n = dt.findRegsByCompatible("arm,cortex-a15-gic", &regs);
+    try testing.expectEqual(@as(usize, 2), n);
+    try testing.expectEqual(@as(u64, 0x8000000), regs[0].addr);
+    try testing.expectEqual(@as(u64, 0x8010000), regs[1].addr);
+    try testing.expectEqual(@as(u64, 0x10000), regs[1].size);
 }
 
 test "second compatible entry in list matches" {

@@ -1,7 +1,17 @@
 const log = @import("log.zig");
 const arch = @import("arch.zig").impl;
+const gic = @import("gic.zig");
+const timer = @import("timer.zig");
 
 extern var exception_vectors: u8;
+
+// Must match the frame built in vectors.S (272 bytes).
+pub const Frame = extern struct {
+    x: [31]u64,
+    elr: u64,
+    spsr: u64,
+    _pad: u64 = 0,
+};
 
 pub fn install() void {
     asm volatile (
@@ -56,23 +66,42 @@ fn ecName(ec: u64) []const u8 {
     };
 }
 
-export fn handleException(index: u64, frame: *const [31]u64) noreturn {
+// Called from vectors.S. Returning resumes the interrupted code via eret.
+export fn handleException(index: u64, frame: *Frame) callconv(.c) void {
+    switch (index & 15) {
+        1, 5 => dispatchIrq(),
+        else => fatal(index & 15, frame),
+    }
+}
+
+fn dispatchIrq() void {
+    while (true) {
+        const intid = gic.ack();
+        if (intid >= gic.SPURIOUS) return;
+        if (intid == timer.INTID) {
+            timer.onIrq();
+        } else {
+            log.kprintf("irq: unexpected intid {d}\n", .{intid});
+        }
+        gic.eoi(intid);
+    }
+}
+
+fn fatal(index: u64, frame: *const Frame) noreturn {
     const esr = mrs("esr_el1");
-    const elr = mrs("elr_el1");
     const far = mrs("far_el1");
-    const spsr = mrs("spsr_el1");
     const ec = (esr >> 26) & 0x3f;
 
     log.kprintf("\nEXCEPTION: {s}\n", .{vector_names[index & 15]});
     log.kprintf("  class: {s} (EC=0x{x:0>2})\n", .{ ecName(ec), ec });
-    log.kprintf("  esr:  0x{x:0>16}  spsr: 0x{x:0>16}\n", .{ esr, spsr });
-    log.kprintf("  elr:  0x{x:0>16}  far:  0x{x:0>16}\n", .{ elr, far });
+    log.kprintf("  esr:  0x{x:0>16}  spsr: 0x{x:0>16}\n", .{ esr, frame.spsr });
+    log.kprintf("  elr:  0x{x:0>16}  far:  0x{x:0>16}\n", .{ frame.elr, far });
 
     var i: usize = 0;
     while (i < 30) : (i += 2) {
-        log.kprintf("  x{d:<2} 0x{x:0>16}  x{d:<2} 0x{x:0>16}\n", .{ i, frame[i], i + 1, frame[i + 1] });
+        log.kprintf("  x{d:<2} 0x{x:0>16}  x{d:<2} 0x{x:0>16}\n", .{ i, frame.x[i], i + 1, frame.x[i + 1] });
     }
-    log.kprintf("  x30 0x{x:0>16}\n", .{frame[30]});
+    log.kprintf("  x30 0x{x:0>16}\n", .{frame.x[30]});
 
     log.kprint("halted.\n");
     arch.halt();
