@@ -28,6 +28,13 @@ pub fn serialWriteByte(byte: u8) void {
     uart()[0] = byte; // UARTDR
 }
 
+pub fn currentEl() u64 {
+    const el = asm volatile ("mrs %[out], currentel"
+        : [out] "=r" (-> u64),
+    );
+    return (el >> 2) & 3;
+}
+
 pub fn halt() noreturn {
     while (true) asm volatile ("wfi");
 }

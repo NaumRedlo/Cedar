@@ -10,9 +10,10 @@ Cedar is **ARM-only by design**: the target hardware is Apple Silicon
 (via QEMU/HVF) and, eventually, Raspberry Pi. There is no x86_64 support
 and none is planned.
 
-Current state: `src/boot.S` parks secondary cores, clears BSS and sets up
-the stack; the kernel prints `Hello, Cedar!` and the device tree address
-over the PL011 serial port.
+Current state (verified in QEMU): boots at EL1, installs exception
+vectors with a full register dump, parses the device tree (machine
+model, RAM range, PL011 discovery by `compatible`), then enables the
+MMU with an identity map and data/instruction caches.
 
 ## Prerequisites
 
@@ -29,6 +30,9 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
 ## Layout
 
 - `src/boot.S` — entry point: arm64 boot header, core parking, BSS, stack
+- `src/vectors.S`, `src/exceptions.zig` — VBAR_EL1 table, ESR decode, dump
+- `src/dtb.zig` — flattened device tree parser (host-tested: `zig build test`)
+- `src/mmu.zig` — stage-1 identity map (1 GiB blocks), MAIR/TCR, caches
 - `src/main.zig` — kmain, panic handler, kprint/kprintf
 - `src/arch/aarch64.zig` — PL011 UART at its physical address, wfi halt
 - `src/console.zig`, `src/font8x8.zig` — framebuffer text console

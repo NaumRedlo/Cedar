@@ -4,6 +4,7 @@ const arch = @import("arch.zig").impl;
 const log = @import("log.zig");
 const exceptions = @import("exceptions.zig");
 const dtb = @import("dtb.zig");
+const mmu = @import("mmu.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -25,9 +26,10 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
     exceptions.install();
 
     kprint("Hello, Cedar!\n\n");
-    kprintf("boot: direct kernel image, no bootloader\n", .{});
+    kprintf("boot: direct kernel image, no bootloader, EL{d}\n", .{arch.currentEl()});
     kprintf("exception vectors: installed (VBAR_EL1)\n", .{});
 
+    var ram: ?dtb.Reg = null;
     if (dtb.Dtb.init(dtb_phys)) |dt| {
         kprintf("dtb: ok at 0x{x}, version {d}, {d} bytes\n", .{ dtb_phys, dt.version, dt.raw.len });
         if (dt.rootProp("model")) |model| {
@@ -35,6 +37,7 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
         }
         if (dt.findByNodePrefix("memory")) |mem| {
             kprintf("memory: 0x{x} + 0x{x} ({d} MiB)\n", .{ mem.addr, mem.size, mem.size >> 20 });
+            ram = mem;
         }
         if (dt.findByCompatible("arm,pl011")) |u| {
             arch.setUartBase(u.addr);
@@ -44,9 +47,22 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
         kprintf("dtb: invalid at 0x{x} ({s})\n", .{ dtb_phys, @errorName(err) });
     }
 
+    if (ram) |mem| {
+        mmu.enable(mem.addr, mem.size);
+        kprintf("mmu: enabled (identity map, caches on) — sctlr.M={}\n", .{mmu.enabled()});
+    } else {
+        kprint("mmu: skipped, no memory node in dtb\n");
+    }
+
     if (build_options.test_exception) {
         kprint("\ntriggering brk #0 to exercise the exception path...\n");
         asm volatile ("brk #0");
+    }
+
+    if (build_options.test_fault) {
+        kprint("\nreading unmapped 0x200000000 to exercise the fault path...\n");
+        const bad: *volatile u32 = @ptrFromInt(0x2_0000_0000);
+        _ = bad.*;
     }
 
     arch.halt();

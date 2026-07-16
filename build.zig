@@ -14,6 +14,11 @@ pub fn build(b: *std.Build) void {
         "test-exception",
         "Execute brk #0 after boot to exercise the exception path",
     ) orelse false;
+    const test_fault = b.option(
+        bool,
+        "test-fault",
+        "Read an unmapped address after MMU enable to exercise the fault path",
+    ) orelse false;
 
     // Bare-metal target: no OS, no FP/SIMD so the kernel never touches
     // vector state (interrupt handlers won't have to save it).
@@ -42,6 +47,7 @@ pub fn build(b: *std.Build) void {
     });
     const options = b.addOptions();
     options.addOption(bool, "test_exception", test_exception);
+    options.addOption(bool, "test_fault", test_fault);
     kernel.root_module.addOptions("build_options", options);
 
     kernel.root_module.addAssemblyFile(b.path("src/boot.S"));
