@@ -6,17 +6,26 @@
 // boards (Raspberry Pi) the base differs and will come from the
 // device tree once Cedar parses it.
 
-const PL011_BASE: u64 = 0x0900_0000;
+const PL011_BASE_DEFAULT: u64 = 0x0900_0000;
 const FR_TXFF: u32 = 1 << 5;
 
-const uart: [*]volatile u32 = @ptrFromInt(PL011_BASE);
+var uart_base: u64 = PL011_BASE_DEFAULT;
 
 pub fn init() void {}
 
+// Called once the device tree told us where the UART really lives.
+pub fn setUartBase(addr: u64) void {
+    uart_base = addr;
+}
+
+fn uart() [*]volatile u32 {
+    return @ptrFromInt(uart_base);
+}
+
 pub fn serialWriteByte(byte: u8) void {
     // Wait while the transmit FIFO is full (UARTFR at 0x18).
-    while ((uart[0x18 / 4] & FR_TXFF) != 0) {}
-    uart[0] = byte; // UARTDR
+    while ((uart()[0x18 / 4] & FR_TXFF) != 0) {}
+    uart()[0] = byte; // UARTDR
 }
 
 pub fn halt() noreturn {

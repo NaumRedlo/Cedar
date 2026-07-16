@@ -3,6 +3,7 @@ const build_options = @import("build_options");
 const arch = @import("arch.zig").impl;
 const log = @import("log.zig");
 const exceptions = @import("exceptions.zig");
+const dtb = @import("dtb.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -25,8 +26,23 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
 
     kprint("Hello, Cedar!\n\n");
     kprintf("boot: direct kernel image, no bootloader\n", .{});
-    kprintf("dtb at: 0x{x}\n", .{dtb_phys});
     kprintf("exception vectors: installed (VBAR_EL1)\n", .{});
+
+    if (dtb.Dtb.init(dtb_phys)) |dt| {
+        kprintf("dtb: ok at 0x{x}, version {d}, {d} bytes\n", .{ dtb_phys, dt.version, dt.raw.len });
+        if (dt.rootProp("model")) |model| {
+            kprintf("machine: {s}\n", .{dtb.str(model)});
+        }
+        if (dt.findByNodePrefix("memory")) |mem| {
+            kprintf("memory: 0x{x} + 0x{x} ({d} MiB)\n", .{ mem.addr, mem.size, mem.size >> 20 });
+        }
+        if (dt.findByCompatible("arm,pl011")) |u| {
+            arch.setUartBase(u.addr);
+            kprintf("uart: pl011 at 0x{x} (dtb-discovered, now in use)\n", .{u.addr});
+        }
+    } else |err| {
+        kprintf("dtb: invalid at 0x{x} ({s})\n", .{ dtb_phys, @errorName(err) });
+    }
 
     if (build_options.test_exception) {
         kprint("\ntriggering brk #0 to exercise the exception path...\n");

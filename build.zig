@@ -68,4 +68,15 @@ pub fn build(b: *std.Build) void {
     run_cmd.step.dependOn(b.getInstallStep());
     const run_step = b.step("run", "Boot Cedar in QEMU (serial on stdio)");
     run_step.dependOn(&run_cmd.step);
+
+    // Pure-logic modules (like the DTB parser) are unit-tested on the host.
+    const dtb_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dtb.zig"),
+            .target = b.resolveTargetQuery(.{}),
+            .optimize = optimize,
+        }),
+    });
+    const test_step = b.step("test", "Run host unit tests");
+    test_step.dependOn(&b.addRunArtifact(dtb_tests).step);
 }
