@@ -106,6 +106,12 @@ pub fn putChar(c: u8) void {
     switch (c) {
         '\n' => newline(),
         '\r' => cur_col = 0,
+        0x08 => { // backspace: erase the previous cell
+            if (cur_col > 0) {
+                cur_col -= 1;
+                drawGlyph(' ', cur_col, cur_row);
+            }
+        },
         else => {
             drawGlyph(c, cur_col, cur_row);
             cur_col += 1;

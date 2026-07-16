@@ -3,6 +3,7 @@ const arch = @import("arch.zig").impl;
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
 const sched = @import("sched.zig");
+const input = @import("input.zig");
 
 extern var exception_vectors: u8;
 
@@ -83,21 +84,23 @@ export fn handleException(index: u64, frame: *Frame) callconv(.c) *Frame {
 }
 
 fn dispatchIrq(frame: *Frame) *Frame {
-    var timer_fired = false;
+    var handled = false;
     while (true) {
         const intid = gic.ack();
         if (intid >= gic.SPURIOUS) break;
         if (intid == timer.INTID) {
             timer.onIrq();
-            timer_fired = true;
+        } else if (intid == input.intid) {
+            input.onIrq();
         } else {
             log.kprintf("irq: unexpected intid {d}\n", .{intid});
         }
+        handled = true;
         gic.eoi(intid);
     }
-    // Timer tick ends the current time slice (after EOI, so the next
-    // tick can fire even if we resume a different thread).
-    return if (timer_fired) sched.reschedule(frame) else frame;
+    // Reschedule after any interrupt (after EOI): a timer tick ends the
+    // time slice, and a keypress lets a just-woken thread run at once.
+    return if (handled) sched.reschedule(frame) else frame;
 }
 
 fn fatal(index: u64, frame: *const Frame) noreturn {

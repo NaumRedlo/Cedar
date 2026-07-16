@@ -141,6 +141,12 @@ pub const Dtb = struct {
         return self.parseReg(value);
     }
 
+    // Raw value of an arbitrary property on the first node whose
+    // "compatible" list contains the given string.
+    pub fn findPropByCompatible(self: *const Dtb, compat: []const u8, prop: []const u8) ?[]const u8 {
+        return self.scanProp(compat, true, prop);
+    }
+
     // Same, but fills `out` with consecutive (addr, size) pairs from the
     // node's reg property (e.g. GIC distributor + cpu interface).
     pub fn findRegsByCompatible(self: *const Dtb, compat: []const u8, out: []Reg) usize {
@@ -157,6 +163,10 @@ pub const Dtb = struct {
     }
 
     fn scan(self: *const Dtb, needle: []const u8, by_compatible: bool) ?[]const u8 {
+        return self.scanProp(needle, by_compatible, "reg");
+    }
+
+    fn scanProp(self: *const Dtb, needle: []const u8, by_compatible: bool, want: []const u8) ?[]const u8 {
         var it = self.iterator();
         var matched = false;
         var reg_value: ?[]const u8 = null;
@@ -177,7 +187,7 @@ pub const Dtb = struct {
                     reg_value = null;
                 },
                 .prop => |p| {
-                    if (std.mem.eql(u8, p.name, "reg")) reg_value = p.value;
+                    if (std.mem.eql(u8, p.name, want)) reg_value = p.value;
                     if (by_compatible and std.mem.eql(u8, p.name, "compatible")) {
                         var rest = p.value;
                         while (std.mem.indexOfScalar(u8, rest, 0)) |nul| {
@@ -205,6 +215,19 @@ pub const ReservationIterator = struct {
         return .{ .addr = addr, .size = size };
     }
 };
+
+// GIC interrupt specifier (3 cells: type, number, flags) → INTID.
+// SPIs (type 0) start at 32, PPIs (type 1) at 16.
+pub fn parseGicIrq(value: []const u8) ?u32 {
+    if (value.len < 12) return null;
+    const kind = be32(value, 0);
+    const num = be32(value, 4);
+    return switch (kind) {
+        0 => 32 + num,
+        1 => 16 + num,
+        else => null,
+    };
+}
 
 pub const Iterator = struct {
     dtb: *const Dtb,
@@ -299,6 +322,15 @@ test "second compatible entry in list matches" {
     const dt = fixture();
     const node = dt.findByCompatible("arm,primecell") orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(u64, 0x9000000), node.addr);
+}
+
+test "arbitrary prop by compatible + gic irq parse" {
+    const dt = fixture();
+    const iv = dt.findPropByCompatible("arm,pl011", "interrupts") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 12), iv.len);
+    try testing.expectEqual(@as(?u32, 33), parseGicIrq(iv)); // SPI 1 -> 32+1
+    const fc = dt.findByCompatible("qemu,fw-cfg-mmio") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, 0x9020000), fc.addr);
 }
 
 test "memory reservation block" {

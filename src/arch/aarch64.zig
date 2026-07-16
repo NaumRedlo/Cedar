@@ -30,6 +30,20 @@ pub fn serialWriteByte(byte: u8) void {
     uart()[0] = byte; // UARTDR
 }
 
+const FR_RXFE: u32 = 1 << 4;
+
+// Unmask the PL011 receive interrupt (UARTIMSC.RXIM).
+pub fn enableUartRxIrq() void {
+    uart()[0x38 / 4] |= 1 << 4;
+}
+
+// Non-blocking read: null when the RX FIFO is empty. Draining the FIFO
+// deasserts the level-triggered RX interrupt.
+pub fn uartReadByte() ?u8 {
+    if ((uart()[0x18 / 4] & FR_RXFE) != 0) return null;
+    return @truncate(uart()[0]);
+}
+
 pub fn enableIrqs() void {
     asm volatile ("msr daifclr, #2");
 }

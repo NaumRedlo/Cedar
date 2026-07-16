@@ -1,5 +1,7 @@
 # Cedar
 
+![Cedar shell on the framebuffer console](docs/screenshot.png)
+
 A hobby ARM (aarch64) operating system kernel written in Zig — with **no
 bootloader**. The boot path belongs to the kernel: a raw image with a
 Linux arm64 boot header is loaded directly by QEMU's `-kernel` (and, in
@@ -21,8 +23,10 @@ bitmap frame allocator over all of RAM and a first kernel heap
 timer are driven from the device tree, and a round-robin scheduler
 preempts kernel threads on every 10 Hz tick — each thread runs on its
 own stack, can yield via `svc #0`, `sleep()` until a tick deadline, or
-block on a counting semaphore, all without burning CPU. The demo is a
-producer/consumer pair whose tick stamps line up exactly.
+block on a counting semaphore, all without burning CPU. On top of that:
+a ramfb framebuffer console (all kernel output mirrors to the screen),
+keyboard input over the PL011 RX interrupt, and an interactive shell —
+`help`, `about`, `uptime`, `mem`, `clear` at the `cedar>` prompt.
 
 ## Prerequisites
 
@@ -51,9 +55,10 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
 - `src/sync.zig` — counting semaphore over the scheduler's block/wake
 - `src/main.zig` — kmain, panic handler, kprint/kprintf
 - `src/arch/aarch64.zig` — PL011 UART at its physical address, wfi halt
+- `src/fwcfg.zig`, `src/ramfb.zig` — QEMU fw_cfg channel and the ramfb
+  display it configures
 - `src/console.zig`, `src/font8x8.zig` — framebuffer text console
-  (dormant until Cedar drives the display itself: ramfb on QEMU virt,
-  mailbox on Raspberry Pi)
+- `src/input.zig`, `src/shell.zig` — UART RX ring + the `cedar>` shell
 - `linker-aarch64.ld` — `.boot` at physical 0x40080000, the rest at
   HHDM + physical with matching load addresses for the flat image
 

@@ -64,15 +64,15 @@ pub fn build(b: *std.Build) void {
 
     const run_cmd = b.addSystemCommand(&.{
         "qemu-system-aarch64",
-        "-M",       "virt",
-        "-cpu",     "cortex-a72",
-        "-m",       "2G",
-        "-kernel",  "zig-out/bin/cedar.img",
-        "-serial",  "stdio",
-        "-display", "none",
+        "-M",      "virt",
+        "-cpu",    "cortex-a72",
+        "-m",      "2G",
+        "-kernel", "zig-out/bin/cedar.img",
+        "-device", "ramfb",
+        "-serial", "stdio",
     });
     run_cmd.step.dependOn(b.getInstallStep());
-    const run_step = b.step("run", "Boot Cedar in QEMU (serial on stdio)");
+    const run_step = b.step("run", "Boot Cedar in QEMU (display window + serial on stdio)");
     run_step.dependOn(&run_cmd.step);
 
     // Pure-logic modules (DTB parser, frame allocator) are unit-tested

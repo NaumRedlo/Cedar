@@ -10,7 +10,11 @@ const heap = @import("heap.zig");
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
 const sched = @import("sched.zig");
-const sync = @import("sync.zig");
+const fwcfg = @import("fwcfg.zig");
+const ramfb = @import("ramfb.zig");
+const console = @import("console.zig");
+const input = @import("input.zig");
+const shell = @import("shell.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -25,22 +29,6 @@ fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
     arch.halt();
 }
 
-var items = sync.Semaphore{};
-
-fn producer() callconv(.c) void {
-    for (0..5) |n| {
-        sched.sleep(5);
-        items.signal();
-        kprintf("producer: item {d} ready at tick {d}\n", .{ n, timer.now() });
-    }
-}
-
-fn consumer() callconv(.c) void {
-    for (0..5) |n| {
-        items.wait();
-        kprintf("consumer: got item {d} at tick {d}\n", .{ n, timer.now() });
-    }
-}
 
 // Entered from boot.S on core 0 in the higher half: MMU on, TTBR0
 // walks disabled, stack ready, BSS cleared. dtb_virt is the device
@@ -110,9 +98,30 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
             arch.enableIrqs();
             kprint("irq: unmasked, ticking\n");
 
-            sched.spawn("producer", producer) catch |e| kprintf("spawn failed: {s}\n", .{@errorName(e)});
-            sched.spawn("consumer", consumer) catch |e| kprintf("spawn failed: {s}\n", .{@errorName(e)});
-            kprint("sched: producer sleeps 5 ticks per item, consumer blocks on a semaphore\n");
+            // Display: fw_cfg + ramfb bring the framebuffer console back.
+            if (dt.findByCompatible("qemu,fw-cfg-mmio")) |fc| {
+                if (fwcfg.init(mmu.p2v(fc.addr))) {
+                    if (ramfb.init(1024, 768)) |fb| {
+                        console.init(fb);
+                        log.console_enabled = true;
+                        kprintf("display: ramfb {d}x{d}, console mirrored to screen\n", .{ fb.width, fb.height });
+                    } else {
+                        kprint("display: no ramfb (add -device ramfb), serial only\n");
+                    }
+                } else {
+                    kprint("display: fw_cfg signature mismatch, serial only\n");
+                }
+            }
+
+            // Keyboard: PL011 RX interrupt, INTID from the device tree.
+            if (dt.findPropByCompatible("arm,pl011", "interrupts")) |iv| {
+                if (dtb.parseGicIrq(iv)) |id| {
+                    input.init(id);
+                    kprintf("input: uart rx on intid {d}\n", .{id});
+                }
+            }
+
+            sched.spawn("shell", shell.run) catch |e| kprintf("spawn failed: {s}\n", .{@errorName(e)});
         } else {
             kprint("gic: no v2 controller in dtb, interrupts stay off\n");
         }
