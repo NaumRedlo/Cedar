@@ -1,8 +1,18 @@
-// Text console rendered onto the Limine framebuffer with an 8x8 bitmap
-// font. Wraps at the right edge and scrolls when the bottom is reached.
+// Text console rendered onto a linear 32-bpp framebuffer with an 8x8
+// bitmap font. Wraps at the right edge and scrolls at the bottom.
+//
+// Currently dormant: with the move to direct kernel-image boot there is
+// no framebuffer provider yet. It returns once Cedar drives the display
+// itself (fw_cfg/ramfb on QEMU virt, mailbox on Raspberry Pi).
 
-const limine = @import("limine.zig");
 const font = @import("font8x8.zig");
+
+pub const Framebuffer = struct {
+    address: [*]u8,
+    width: u64,
+    height: u64,
+    pitch: u64,
+};
 
 const GLYPH_W = 8;
 const GLYPH_H = 8;
@@ -13,25 +23,19 @@ const CELL_H = GLYPH_H * SCALE;
 const BG: u32 = 0x0d1a12; // dark cedar green
 const FG: u32 = 0xd7e4d0; // pale green-white
 
-var fb: ?*limine.Framebuffer = null;
+var fb: ?Framebuffer = null;
 var words_per_row: u64 = 0;
 var cols: u64 = 0;
 var rows: u64 = 0;
 var cur_col: u64 = 0;
 var cur_row: u64 = 0;
 
-pub fn init() bool {
-    const resp = limine.framebuffer_request.response orelse return false;
-    if (resp.framebuffer_count < 1) return false;
-    const f = resp.framebuffers.?[0];
-    if (f.bpp != 32) return false;
-
-    fb = f;
-    words_per_row = f.pitch / 4;
-    cols = f.width / CELL_W;
-    rows = f.height / CELL_H;
+pub fn init(desc: Framebuffer) void {
+    fb = desc;
+    words_per_row = desc.pitch / 4;
+    cols = desc.width / CELL_W;
+    rows = desc.height / CELL_H;
     clear();
-    return true;
 }
 
 pub fn ready() bool {

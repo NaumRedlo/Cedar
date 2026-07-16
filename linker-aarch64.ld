@@ -1,61 +1,52 @@
-/* Cedar kernel linker script (aarch64, Limine boot protocol).
-   Based on limine-c-template/kernel/linker-scripts/aarch64.lds */
+/* Cedar kernel linker script (aarch64, direct kernel-image boot).
+   Linked at the physical address where QEMU's -kernel loader places the
+   image on the virt machine: RAM base (0x40000000) + text_offset (0x80000).
+   The MMU is off at entry; everything runs at physical addresses until
+   Cedar sets up its own page tables. */
 
 OUTPUT_FORMAT(elf64-littleaarch64)
 
-ENTRY(kmain)
-
-/* Separate PT_LOAD program headers so the bootloader maps each region
-   with the right MMU permissions. */
-PHDRS
-{
-    limine_requests PT_LOAD;
-    text PT_LOAD;
-    rodata PT_LOAD;
-    data PT_LOAD;
-}
+ENTRY(_start)
 
 SECTIONS
 {
-    /* Topmost 2 GiB of the address space, as the Limine spec mandates. */
-    . = 0xffffffff80000000;
-
-    .limine_requests : {
-        KEEP(*(.limine_requests_start))
-        KEEP(*(.limine_requests))
-        KEEP(*(.limine_requests_end))
-    } :limine_requests
-
-    . = ALIGN(CONSTANT(MAXPAGESIZE));
+    . = 0x40080000;
 
     .text : {
+        KEEP(*(.text.boot))
         *(.text .text.*)
-    } :text
+    }
 
-    . = ALIGN(CONSTANT(MAXPAGESIZE));
+    . = ALIGN(4096);
 
     .rodata : {
         *(.rodata .rodata.*)
-    } :rodata
+    }
 
-    .note.gnu.build-id : {
-        *(.note.gnu.build-id)
-    } :rodata
-
-    . = ALIGN(CONSTANT(MAXPAGESIZE));
+    . = ALIGN(4096);
 
     .data : {
         *(.data .data.*)
-    } :data
+    }
 
-    /* .bss must be the last thing mapped to :data, otherwise the binary
-       gets padded with unnecessary zeros. */
+    . = ALIGN(4096);
+
     .bss : {
+        __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
-    } :data
+        . = ALIGN(16);
+        __bss_end = .;
 
-    /* .note.* and .eh_frame* may cause issues on some hosts. */
+        /* 64 KiB boot stack for core 0. */
+        . = ALIGN(16);
+        __stack_bottom = .;
+        . += 0x10000;
+        __stack_top = .;
+    }
+
+    __image_size = . - 0x40080000;
+
     /DISCARD/ : {
         *(.eh_frame*)
         *(.note .note.*)

@@ -2,6 +2,10 @@ const std = @import("std");
 
 // Cedar is ARM-only by design: aarch64 is the sole supported architecture
 // (Apple Silicon via QEMU/HVF, Raspberry Pi hardware later).
+//
+// No bootloader: the kernel is a raw image with a Linux arm64 boot header,
+// loaded directly by QEMU's -kernel (and later by the Raspberry Pi
+// firmware as kernel8.img).
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
@@ -28,33 +32,30 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            // The small code model reaches the top-2GiB link address
-            // through PC-relative addressing.
             .code_model = .small,
         }),
     });
+    kernel.root_module.addAssemblyFile(b.path("src/boot.S"));
     kernel.setLinkerScript(b.path("linker-aarch64.ld"));
-    kernel.entry = .{ .symbol_name = "kmain" };
+    kernel.entry = .{ .symbol_name = "_start" };
     kernel.pie = false;
     b.installArtifact(kernel);
 
-    const iso_cmd = b.addSystemCommand(&.{"scripts/mkiso.sh"});
-    iso_cmd.step.dependOn(b.getInstallStep());
-    const iso_step = b.step("iso", "Build bootable cedar.iso");
-    iso_step.dependOn(&iso_cmd.step);
+    // Strip the ELF container down to the raw bytes QEMU/RPi firmware load.
+    const image = kernel.addObjCopy(.{ .format = .bin });
+    const install_image = b.addInstallBinFile(image.getOutput(), "cedar.img");
+    b.getInstallStep().dependOn(&install_image.step);
 
-    // UEFI-only on ARM: edk2 firmware ships with Homebrew's QEMU.
     const run_cmd = b.addSystemCommand(&.{
         "qemu-system-aarch64",
-        "-M",      "virt",
-        "-cpu",    "cortex-a72",
-        "-m",      "2G",
-        "-device", "ramfb",
-        "-bios",   "/usr/local/share/qemu/edk2-aarch64-code.fd",
-        "-cdrom",  "cedar.iso",
-        "-serial", "stdio",
+        "-M",       "virt",
+        "-cpu",     "cortex-a72",
+        "-m",       "2G",
+        "-kernel",  "zig-out/bin/cedar.img",
+        "-serial",  "stdio",
+        "-display", "none",
     });
-    run_cmd.step.dependOn(&iso_cmd.step);
+    run_cmd.step.dependOn(b.getInstallStep());
     const run_step = b.step("run", "Boot Cedar in QEMU (serial on stdio)");
     run_step.dependOn(&run_cmd.step);
 }
