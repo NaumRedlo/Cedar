@@ -10,10 +10,12 @@ Cedar is **ARM-only by design**: the target hardware is Apple Silicon
 (via QEMU/HVF) and, eventually, Raspberry Pi. There is no x86_64 support
 and none is planned.
 
-Current state (verified in QEMU): boots at EL1, installs exception
-vectors with a full register dump, parses the device tree (machine
-model, RAM range, PL011 discovery by `compatible`), enables the MMU
-with an identity map and data/instruction caches, then brings up a
+Current state (verified in QEMU): boots at EL1, brings the MMU up in
+the boot stub and runs entirely in the **higher half** — the kernel is
+linked at HHDM (`0xffffff8000000000`) + physical, TTBR0 walks are
+disabled so null dereferences fault with a register dump. It installs
+exception vectors, parses the device tree (machine model, RAM range,
+PL011 discovery by `compatible`), and brings up a
 bitmap frame allocator over all of RAM and a first kernel heap
 (std.mem.Allocator-compatible). GICv2 and the virtual architectural
 timer are driven from the device tree, and a round-robin scheduler
@@ -36,10 +38,11 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
 
 ## Layout
 
-- `src/boot.S` — entry point: arm64 boot header, core parking, BSS, stack
+- `src/boot.S` — entry point: arm64 boot header, core parking, page
+  tables + MMU bring-up, jump to the higher half, BSS, stack
 - `src/vectors.S`, `src/exceptions.zig` — VBAR_EL1 table, ESR decode, dump
 - `src/dtb.zig` — flattened device tree parser (host-tested: `zig build test`)
-- `src/mmu.zig` — stage-1 identity map (1 GiB blocks), MAIR/TCR, caches
+- `src/mmu.zig` — HHDM constants, phys/virt conversion helpers
 - `src/pmm.zig` — bitmap frame allocator (host-tested)
 - `src/mem.zig`, `src/heap.zig` — RAM bookkeeping and the kernel heap
 - `src/gic.zig`, `src/timer.zig` — GICv2 driver and the CNTV timer
@@ -51,8 +54,8 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
 - `src/console.zig`, `src/font8x8.zig` — framebuffer text console
   (dormant until Cedar drives the display itself: ramfb on QEMU virt,
   mailbox on Raspberry Pi)
-- `linker-aarch64.ld` — links at 0x40080000 (virt RAM base + text_offset),
-  reserves the boot stack, exports BSS/image-size symbols
+- `linker-aarch64.ld` — `.boot` at physical 0x40080000, the rest at
+  HHDM + physical with matching load addresses for the flat image
 
 ## Roadmap
 

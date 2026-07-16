@@ -1,8 +1,11 @@
-/* Cedar kernel linker script (aarch64, direct kernel-image boot).
-   Linked at the physical address where QEMU's -kernel loader places the
-   image on the virt machine: RAM base (0x40000000) + text_offset (0x80000).
-   The MMU is off at entry; everything runs at physical addresses until
-   Cedar sets up its own page tables. */
+/* Cedar kernel linker script (aarch64, higher-half).
+   The .boot section keeps physical addresses (VMA = LMA): it runs with
+   the MMU off. Everything else is linked at HHDM + physical — the
+   AT() directives keep load addresses contiguous so objcopy still
+   produces a flat bootable image with the header at offset 0. */
+
+KERNEL_PHYS = 0x40080000;
+HHDM_BASE   = 0xffffff8000000000;
 
 OUTPUT_FORMAT(elf64-littleaarch64)
 
@@ -10,28 +13,34 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x40080000;
+    . = KERNEL_PHYS;
 
-    .text : {
+    .boot : {
         KEEP(*(.text.boot))
+    }
+
+    . = ALIGN(4096);
+    . += HHDM_BASE;
+
+    .text : AT(ADDR(.text) - HHDM_BASE) {
         *(.text .text.*)
     }
 
     . = ALIGN(4096);
 
-    .rodata : {
+    .rodata : AT(ADDR(.rodata) - HHDM_BASE) {
         *(.rodata .rodata.*)
     }
 
     . = ALIGN(4096);
 
-    .data : {
+    .data : AT(ADDR(.data) - HHDM_BASE) {
         *(.data .data.*)
     }
 
     . = ALIGN(4096);
 
-    .bss : {
+    .bss : AT(ADDR(.bss) - HHDM_BASE) {
         __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
@@ -45,7 +54,7 @@ SECTIONS
         __stack_top = .;
     }
 
-    __image_size = . - 0x40080000;
+    __image_size = (. - HHDM_BASE) - KERNEL_PHYS;
 
     /DISCARD/ : {
         *(.eh_frame*)

@@ -12,6 +12,7 @@ const mem = @import("mem.zig");
 const log = @import("log.zig");
 const timer = @import("timer.zig");
 const arch = @import("arch.zig").impl;
+const mmu = @import("mmu.zig");
 
 const Frame = exceptions.Frame;
 
@@ -51,7 +52,7 @@ pub fn spawn(name: []const u8, entry: *const fn () callconv(.c) void) SpawnError
     } else return error.NoSlot;
 
     const stack_base = mem.frames.allocContiguous(STACK_PAGES) orelse return error.NoMemory;
-    const stack_top = stack_base + STACK_PAGES * mem.PAGE_SIZE;
+    const stack_top = mmu.p2v(stack_base + STACK_PAGES * mem.PAGE_SIZE);
 
     // Fabricate the frame eret will consume: entry point in ELR, thread
     // exit as the return address, sp ends up at stack_top after restore.

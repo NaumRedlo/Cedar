@@ -6,22 +6,26 @@
 const std = @import("std");
 const dtb = @import("dtb.zig");
 const pmm = @import("pmm.zig");
+const mmu = @import("mmu.zig");
 
 pub var frames: pmm.FrameAllocator = undefined;
 
 pub const PAGE_SIZE = pmm.PAGE_SIZE;
 
-pub fn init(dt: *const dtb.Dtb, ram: dtb.Reg, dtb_phys: usize) void {
-    const kernel_start = @intFromPtr(@extern([*]const u8, .{ .name = "_start" }));
-    const stack_top = @intFromPtr(@extern([*]const u8, .{ .name = "__stack_top" }));
+pub fn init(dt: *const dtb.Dtb, ram: dtb.Reg, dtb_virt: usize) void {
+    // _start sits in .boot, which is linked at its physical address;
+    // everything else is HHDM-virtual and converts via v2p.
+    const kernel_start_phys = @intFromPtr(@extern([*]const u8, .{ .name = "_start" }));
+    const stack_top_virt = @intFromPtr(@extern([*]const u8, .{ .name = "__stack_top" }));
 
-    const bitmap_addr = std.mem.alignForward(usize, stack_top, PAGE_SIZE);
+    const bitmap_virt = std.mem.alignForward(usize, stack_top_virt, PAGE_SIZE);
     const bitmap_bytes = pmm.FrameAllocator.requiredBitmapBytes(ram.size);
-    const storage = @as([*]u8, @ptrFromInt(bitmap_addr))[0..bitmap_bytes];
+    const storage = @as([*]u8, @ptrFromInt(bitmap_virt))[0..bitmap_bytes];
 
     frames = pmm.FrameAllocator.init(storage, ram.addr, ram.size);
-    frames.reserveRange(kernel_start, (bitmap_addr + bitmap_bytes) - kernel_start);
-    frames.reserveRange(dtb_phys, dt.raw.len);
+    frames.reserveRange(kernel_start_phys, mmu.v2p(bitmap_virt + bitmap_bytes) - kernel_start_phys);
+    frames.reserveRange(mmu.BOOT_TABLE_PHYS, mmu.BOOT_TABLE_PAGES * PAGE_SIZE);
+    frames.reserveRange(mmu.v2p(dtb_virt), dt.raw.len);
     var rsv = dt.reservations();
     while (rsv.next()) |r| frames.reserveRange(r.addr, r.size);
 }

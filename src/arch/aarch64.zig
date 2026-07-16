@@ -1,12 +1,14 @@
 // aarch64: serial output through the PL011 UART of QEMU's `virt`
-// machine, accessed at its physical address — the MMU is off until
-// Cedar builds its own page tables. Halt via wfi.
+// machine, reached via the higher-half direct map (low addresses are
+// not mapped at all once boot.S disables TTBR0). Halt via wfi.
 //
 // 0x0900_0000 is where the virt machine places the PL011; on real
-// boards (Raspberry Pi) the base differs and will come from the
-// device tree once Cedar parses it.
+// boards (Raspberry Pi) the base differs and comes from the device
+// tree once Cedar parses it.
 
-const PL011_BASE_DEFAULT: u64 = 0x0900_0000;
+const mmu = @import("../mmu.zig");
+
+const PL011_BASE_DEFAULT: u64 = mmu.HHDM + 0x0900_0000;
 const FR_TXFF: u32 = 1 << 5;
 
 var uart_base: u64 = PL011_BASE_DEFAULT;

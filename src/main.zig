@@ -42,20 +42,25 @@ fn consumer() callconv(.c) void {
     }
 }
 
-// Entered from boot.S on core 0, stack ready, BSS cleared, MMU off.
-// dtb_phys is the device tree blob address QEMU passed in x0.
-export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
+// Entered from boot.S on core 0 in the higher half: MMU on, TTBR0
+// walks disabled, stack ready, BSS cleared. dtb_virt is the device
+// tree address through the direct map.
+export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
     arch.init();
     exceptions.install();
 
     kprint("Hello, Cedar!\n\n");
     kprintf("boot: direct kernel image, no bootloader, EL{d}\n", .{arch.currentEl()});
+    kprintf("mmu: higher half, hhdm at 0x{x}, low half {s}\n", .{
+        mmu.HHDM,
+        if (mmu.lowHalfDisabled()) @as([]const u8, "disabled") else "ENABLED?!",
+    });
     kprintf("exception vectors: installed (VBAR_EL1)\n", .{});
 
     var dt_store: ?dtb.Dtb = null;
     var ram: ?dtb.Reg = null;
-    if (dtb.Dtb.init(dtb_phys)) |dt| {
-        kprintf("dtb: ok at 0x{x}, version {d}, {d} bytes\n", .{ dtb_phys, dt.version, dt.raw.len });
+    if (dtb.Dtb.init(dtb_virt)) |dt| {
+        kprintf("dtb: ok at 0x{x}, version {d}, {d} bytes\n", .{ dtb_virt, dt.version, dt.raw.len });
         if (dt.rootProp("model")) |model| {
             kprintf("machine: {s}\n", .{dtb.str(model)});
         }
@@ -64,24 +69,17 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
             ram = m;
         }
         if (dt.findByCompatible("arm,pl011")) |u| {
-            arch.setUartBase(u.addr);
-            kprintf("uart: pl011 at 0x{x} (dtb-discovered, now in use)\n", .{u.addr});
+            arch.setUartBase(mmu.p2v(u.addr));
+            kprintf("uart: pl011 at phys 0x{x} (dtb-discovered, via hhdm)\n", .{u.addr});
         }
         dt_store = dt;
     } else |err| {
-        kprintf("dtb: invalid at 0x{x} ({s})\n", .{ dtb_phys, @errorName(err) });
-    }
-
-    if (ram) |m| {
-        mmu.enable(m.addr, m.size);
-        kprintf("mmu: enabled (identity map, caches on) — sctlr.M={}\n", .{mmu.enabled()});
-    } else {
-        kprint("mmu: skipped, no memory node in dtb\n");
+        kprintf("dtb: invalid at 0x{x} ({s})\n", .{ dtb_virt, @errorName(err) });
     }
 
     if (dt_store) |*dt| {
         if (ram) |m| {
-            mem.init(dt, m, dtb_phys);
+            mem.init(dt, m, dtb_virt);
             kprintf("pmm: {d} MiB free of {d} MiB ({d} frames)\n", .{
                 mem.freeMiB(), mem.totalMiB(), mem.frames.frames,
             });
@@ -105,8 +103,8 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
     if (dt_store) |*dt| {
         var regs: [2]dtb.Reg = undefined;
         if (dt.findRegsByCompatible("arm,cortex-a15-gic", &regs) >= 2) {
-            gic.init(regs[0].addr, regs[1].addr);
-            kprintf("gic: v2, distributor 0x{x}, cpu interface 0x{x}\n", .{ regs[0].addr, regs[1].addr });
+            gic.init(mmu.p2v(regs[0].addr), mmu.p2v(regs[1].addr));
+            kprintf("gic: v2, distributor 0x{x}, cpu interface 0x{x} (phys, via hhdm)\n", .{ regs[0].addr, regs[1].addr });
             timer.init(10);
             sched.init();
             arch.enableIrqs();
@@ -126,8 +124,8 @@ export fn kmain(dtb_phys: usize) callconv(.c) noreturn {
     }
 
     if (build_options.test_fault) {
-        kprint("\nreading unmapped 0x200000000 to exercise the fault path...\n");
-        const bad: *volatile u32 = @ptrFromInt(0x2_0000_0000);
+        kprint("\ndereferencing (near-)null 0x10 — the low half must fault...\n");
+        const bad: *volatile u32 = @ptrFromInt(0x10);
         _ = bad.*;
     }
 
