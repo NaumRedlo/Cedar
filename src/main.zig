@@ -3,9 +3,8 @@ const builtin = @import("builtin");
 const limine = @import("limine.zig");
 
 const arch = switch (builtin.cpu.arch) {
-    .x86_64 => @import("arch/x86_64.zig"),
     .aarch64 => @import("arch/aarch64.zig"),
-    else => @compileError("Cedar does not support this architecture"),
+    else => @compileError("Cedar is ARM-only: aarch64 is the sole supported architecture"),
 };
 
 pub const panic = std.debug.FullPanic(panicHandler);
