@@ -1,5 +1,5 @@
 /.zig-cache
 /zig-out
 /iso_root
-/cedar.iso
+/cedar-*.iso
 /limine/
