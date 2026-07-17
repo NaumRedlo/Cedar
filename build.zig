@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
     // the kernel and installed into /Programs at boot.
     const wf = b.addWriteFiles();
     var embed_source: []const u8 = "";
-    for ([_][]const u8{ "hello", "crash" }) |prog| {
+    for ([_][]const u8{ "hello", "crash", "reader" }) |prog| {
         const exe = b.addExecutable(.{
             .name = prog,
             .use_llvm = true,

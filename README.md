@@ -28,8 +28,10 @@ a ramfb framebuffer console (all kernel output mirrors to the screen),
 keyboard input over the PL011 RX interrupt, an interactive shell, Cedar
 FS (in-RAM, case-insensitive/case-preserving, /System /Programs /Home),
 and **userspace**: `run /Programs/hello` loads a flat binary from the
-FS into its own EL0 address space with write/sleep/exit/ticks syscalls.
-A faulting process is killed with a diagnostic; the kernel survives.
+FS into its own EL0 address space. Syscalls: write, sleep, exit, ticks,
+and open/read/close over Cedar FS with per-process file descriptors.
+A faulting process is killed with a diagnostic; the kernel survives,
+and every frame the process owned returns to the allocator.
 
 ## Prerequisites
 

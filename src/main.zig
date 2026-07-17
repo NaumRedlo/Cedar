@@ -49,6 +49,7 @@ fn initFs() void {
             try fs.global.write("/Home/welcome.txt", "Welcome home.\nThis file lives in RAM and in the moment.\n");
             try fs.global.write("/Programs/hello", userprogs.hello);
             try fs.global.write("/Programs/crash", userprogs.crash);
+            try fs.global.write("/Programs/reader", userprogs.reader);
         }
     };
     boot.run() catch {

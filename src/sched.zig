@@ -14,6 +14,7 @@ const timer = @import("timer.zig");
 const arch = @import("arch.zig").impl;
 const mmu = @import("mmu.zig");
 const user = @import("user.zig");
+const fs = @import("fs.zig");
 
 const Frame = exceptions.Frame;
 
@@ -25,6 +26,13 @@ const INITIAL_SPSR: u64 = 0x345;
 
 pub const State = enum { unused, ready, running, sleeping, blocked, finished };
 
+pub const MAX_FDS = 8;
+
+pub const Fd = struct {
+    node: *fs.Node,
+    offset: usize = 0,
+};
+
 pub const Thread = struct {
     state: State = .unused,
     context: *Frame = undefined,
@@ -33,7 +41,12 @@ pub const Thread = struct {
     wake_at: u64 = 0, // tick deadline while .sleeping
     wait_token: usize = 0, // what we're blocked on while .blocked
     ttbr0: ?u64 = null, // user page table root; null = pure kernel thread
+    fds: [MAX_FDS]?Fd = @splat(null), // open files (user processes)
 };
+
+pub fn currentThread() *Thread {
+    return &threads[current];
+}
 
 var threads: [MAX_THREADS]Thread = @splat(.{});
 var current: usize = 0;
@@ -59,6 +72,9 @@ fn reapThread(t: *Thread) void {
         for (0..STACK_PAGES) |p| mem.frames.free(t.stack_base + p * mem.PAGE_SIZE);
     }
     if (t.ttbr0) |root| user.destroy(root);
+    for (t.fds) |maybe| {
+        if (maybe) |h| h.node.open_count -= 1;
+    }
     t.* = .{}; // back to .unused
 }
 

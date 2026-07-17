@@ -23,6 +23,7 @@ pub const Error = error{
     IsDir,
     NotFile,
     NotEmpty,
+    Busy,
     BadPath,
 } || std.mem.Allocator.Error;
 
@@ -38,6 +39,7 @@ pub const Node = struct {
     parent: ?*Node,
     children: std.ArrayList(*Node) = .empty, // dirs
     data: std.ArrayList(u8) = .empty, // files
+    open_count: u32 = 0, // live file descriptors pointing here
 
     pub fn size(self: *const Node) usize {
         return switch (self.kind) {
@@ -146,6 +148,7 @@ pub const Fs = struct {
         const node = self.lookup(path) orelse return Error.NotFound;
         const parent = node.parent orelse return Error.BadPath; // root
         if (node.kind == .dir and node.children.items.len != 0) return Error.NotEmpty;
+        if (node.open_count != 0) return Error.Busy;
 
         const idx = std.mem.indexOfScalar(*Node, parent.children.items, node) orelse unreachable;
         _ = parent.children.orderedRemove(idx);
@@ -245,6 +248,18 @@ test "errors: parents, kinds, bad paths" {
     try testing.expectError(Error.NotDir, fs.create("/f/child"));
     try testing.expectError(Error.IsDir, fs.read("/"));
     try testing.expectError(Error.BadPath, fs.mkdir("/"));
+}
+
+test "open files cannot be removed" {
+    var fs = try testFs();
+    defer deinitTestFs(&fs);
+
+    try fs.write("/f", "data");
+    const node = fs.lookup("/f").?;
+    node.open_count = 1;
+    try testing.expectError(Error.Busy, fs.remove("/f"));
+    node.open_count = 0;
+    try fs.remove("/f");
 }
 
 test "timestamps advance with the clock" {
