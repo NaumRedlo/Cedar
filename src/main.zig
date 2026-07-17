@@ -18,6 +18,8 @@ const shell = @import("shell.zig");
 const fs = @import("fs.zig");
 const user = @import("user.zig");
 const userprogs = @import("userprogs");
+const virtio = @import("virtio.zig");
+const disk = @import("disk.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -33,31 +35,50 @@ fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
 }
 
 fn initFs() void {
-    fs.global = fs.Fs.init(heap.allocator()) catch {
-        kprint("fs: init failed\n");
-        return;
-    };
+    // A snapshot on disk wins over the built-in defaults.
+    var restored = false;
+    if (disk.load(heap.allocator())) |loaded| {
+        fs.global = loaded;
+        restored = true;
+    } else |err| switch (err) {
+        error.NoDisk, error.NoSnapshot => {},
+        else => kprintf("fs: snapshot ignored ({s})\n", .{@errorName(err)}),
+    }
+    if (!restored) {
+        fs.global = fs.Fs.init(heap.allocator()) catch {
+            kprint("fs: init failed\n");
+            return;
+        };
+    }
     fs.global.clock = &timer.now;
     fs.ready = true;
 
+    // /System and /Programs belong to the running kernel: always
+    // refreshed so restored snapshots never carry stale binaries.
     const boot = struct {
-        fn run() !void {
-            _ = try fs.global.mkdir("/System");
-            _ = try fs.global.mkdir("/Programs");
-            _ = try fs.global.mkdir("/Home");
+        fn run(fresh: bool) !void {
+            _ = fs.global.mkdir("/System") catch {};
+            _ = fs.global.mkdir("/Programs") catch {};
+            _ = fs.global.mkdir("/Home") catch {};
             try fs.global.write("/System/version.txt", "Cedar 0.1 (aarch64)\nno bootloader, no mercy\n");
-            try fs.global.write("/Home/welcome.txt", "Welcome home.\nThis file lives in RAM and in the moment.\n");
             try fs.global.write("/Programs/hello", userprogs.hello);
             try fs.global.write("/Programs/crash", userprogs.crash);
             try fs.global.write("/Programs/reader", userprogs.reader);
             try fs.global.write("/Programs/cat", userprogs.cat);
+            if (fresh) {
+                try fs.global.write("/Home/welcome.txt", "Welcome home.\nThis file lives in RAM and in the moment.\n");
+            }
         }
     };
-    boot.run() catch {
+    boot.run(!restored) catch {
         kprint("fs: bootstrap failed\n");
         return;
     };
-    kprint("fs: Cedar FS mounted at / (RAM, case-insensitive)\n");
+    if (restored) {
+        kprint("fs: snapshot restored from disk, /Programs refreshed\n");
+    } else {
+        kprint("fs: Cedar FS mounted at / (fresh, case-insensitive)\n");
+    }
 }
 
 
@@ -109,6 +130,17 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
 
             if (heap.init(1024)) {
                 kprint("heap: 4 MiB online\n");
+
+                var vit = dt.compatibleRegs("virtio,mmio");
+                while (vit.next()) |slot| {
+                    if (virtio.probeBlk(mmu.p2v(slot.addr))) {
+                        kprintf("disk: virtio-blk at 0x{x}, {d} MiB\n", .{
+                            slot.addr, (virtio.capacity_sectors * virtio.SECTOR) >> 20,
+                        });
+                        break;
+                    }
+                }
+
                 initFs();
             } else {
                 kprint("heap: init failed\n");

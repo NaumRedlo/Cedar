@@ -33,7 +33,10 @@ delivered System V style — an argv block on the user stack, argc/argv
 in x0/x1. Syscalls: write, sleep, exit, ticks, and open/read/close
 over Cedar FS with per-process file descriptors. A faulting process is
 killed with a diagnostic; the kernel survives, and every frame the
-process owned returns to the allocator.
+process owned returns to the allocator. Cedar FS is **persistent**: a
+virtio-blk driver stores whole-tree snapshots on a disk image (`save`
+in the shell, auto-restore at boot — /System and /Programs always
+refreshed from the running kernel).
 
 ## Prerequisites
 
@@ -66,7 +69,8 @@ zig build run   # boot cedar.img in QEMU (serial output on stdio)
   display it configures
 - `src/console.zig`, `src/font8x8.zig` — framebuffer text console
 - `src/input.zig`, `src/shell.zig` — UART RX ring + the `cedar>` shell
-- `src/fs.zig` — Cedar FS, the in-RAM tree (host-tested)
+- `src/fs.zig` — Cedar FS tree + snapshot format (host-tested)
+- `src/virtio.zig`, `src/disk.zig` — virtio-blk driver and snapshot I/O
 - `src/user.zig`, `src/syscall.zig` — EL0 address spaces and syscalls
 - `userland/` — user programs, built as flat binaries by the same build
 - `linker-aarch64.ld` — `.boot` at physical 0x40080000, the rest at

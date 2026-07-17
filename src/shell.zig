@@ -11,6 +11,7 @@ const fs = @import("fs.zig");
 const sched = @import("sched.zig");
 const user = @import("user.zig");
 const heap = @import("heap.zig");
+const disk = @import("disk.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -57,9 +58,9 @@ fn execute(line: []const u8) void {
     const cmd = it.next() orelse return;
 
     if (std.mem.eql(u8, cmd, "help")) {
-        kprint("system: help, about, uptime, mem, clear, ps\n");
+        kprint("system: help, about, uptime, mem, clear, ps, save\n");
         kprint("files:  ls [path], cat <path>, write <path> <text>, mkdir <path>, rm <path>\n");
-        kprint("proc:   run <path>\n");
+        kprint("proc:   run <path> [args...]\n");
     } else if (std.mem.eql(u8, cmd, "about")) {
         kprint("Cedar — an ARM-only hobby kernel in Zig. No bootloader, no mercy.\n");
     } else if (std.mem.eql(u8, cmd, "uptime")) {
@@ -82,6 +83,12 @@ fn execute(line: []const u8) void {
         cmdWrite(path, std.mem.trimStart(u8, it.rest(), " "));
     } else if (std.mem.eql(u8, cmd, "ps")) {
         sched.ps();
+    } else if (std.mem.eql(u8, cmd, "save")) {
+        if (disk.save()) |bytes| {
+            kprintf("fs: snapshot saved, {d} bytes\n", .{bytes});
+        } else |e| {
+            kprintf("save: {s}\n", .{@errorName(e)});
+        }
     } else if (std.mem.eql(u8, cmd, "run")) {
         cmdRun(&it);
     } else {

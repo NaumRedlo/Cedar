@@ -86,6 +86,11 @@ pub fn build(b: *std.Build) void {
     const install_image = b.addInstallBinFile(image.getOutput(), "cedar.img");
     b.getInstallStep().dependOn(&install_image.step);
 
+    // A 16 MiB raw disk for Cedar FS snapshots, created on first run.
+    const mkdisk = b.addSystemCommand(&.{
+        "sh", "-c", "[ -f disk.img ] || qemu-img create -f raw disk.img 16M",
+    });
+
     const run_cmd = b.addSystemCommand(&.{
         "qemu-system-aarch64",
         "-M",      "virt",
@@ -93,9 +98,12 @@ pub fn build(b: *std.Build) void {
         "-m",      "2G",
         "-kernel", "zig-out/bin/cedar.img",
         "-device", "ramfb",
+        "-drive",  "file=disk.img,if=none,format=raw,id=hd0",
+        "-device", "virtio-blk-device,drive=hd0",
         "-serial", "stdio",
     });
     run_cmd.step.dependOn(b.getInstallStep());
+    run_cmd.step.dependOn(&mkdisk.step);
     const run_step = b.step("run", "Boot Cedar in QEMU (display window + serial on stdio)");
     run_step.dependOn(&run_cmd.step);
 

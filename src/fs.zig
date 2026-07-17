@@ -144,6 +144,16 @@ pub const Fs = struct {
         return node.data.items;
     }
 
+    pub fn serialize(self: *const Fs, w: anytype) !void {
+        try serializeNode(self.root, w);
+    }
+
+    pub fn deserialize(alloc: std.mem.Allocator, r: anytype) !Fs {
+        const root = try deserializeNode(alloc, null, r);
+        if (root.kind != .dir or root.name.len != 0) return DeserializeError.Corrupt;
+        return .{ .alloc = alloc, .root = root };
+    }
+
     pub fn remove(self: *Fs, path: []const u8) Error!void {
         const node = self.lookup(path) orelse return Error.NotFound;
         const parent = node.parent orelse return Error.BadPath; // root
@@ -160,6 +170,82 @@ pub const Fs = struct {
         self.alloc.destroy(node);
     }
 };
+
+// --- snapshot serialization (CedarFS1) ---
+//
+// A depth-first stream of node records, storage-agnostic: the writer/
+// reader only need writeAll/readAll. All integers little-endian.
+//   record: u8 kind, u16 name_len, name, u64 created, u64 modified,
+//           dir → u32 child_count + child records
+//           file → u64 data_len + bytes
+
+fn putInt(w: anytype, comptime T: type, v: T) !void {
+    var b: [@sizeOf(T)]u8 = undefined;
+    std.mem.writeInt(T, &b, v, .little);
+    try w.writeAll(&b);
+}
+
+fn getInt(r: anytype, comptime T: type) !T {
+    var b: [@sizeOf(T)]u8 = undefined;
+    try r.readAll(&b);
+    return std.mem.readInt(T, &b, .little);
+}
+
+fn serializeNode(node: *const Node, w: anytype) !void {
+    try putInt(w, u8, @intFromEnum(node.kind));
+    try putInt(w, u16, @intCast(node.name.len));
+    try w.writeAll(node.name);
+    try putInt(w, u64, node.created);
+    try putInt(w, u64, node.modified);
+    switch (node.kind) {
+        .dir => {
+            try putInt(w, u32, @intCast(node.children.items.len));
+            for (node.children.items) |c| try serializeNode(c, w);
+        },
+        .file => {
+            try putInt(w, u64, node.data.items.len);
+            try w.writeAll(node.data.items);
+        },
+    }
+}
+
+const DeserializeError = error{ Corrupt, EndOfStream } || std.mem.Allocator.Error;
+
+fn deserializeNode(alloc: std.mem.Allocator, parent: ?*Node, r: anytype) !*Node {
+    const kind_raw = try getInt(r, u8);
+    if (kind_raw > 1) return DeserializeError.Corrupt;
+    const kind: Kind = @enumFromInt(kind_raw);
+    const name_len = try getInt(r, u16);
+    if (name_len > 255) return DeserializeError.Corrupt;
+    var name_buf: [255]u8 = undefined;
+    try r.readAll(name_buf[0..name_len]);
+
+    const node = try alloc.create(Node);
+    errdefer alloc.destroy(node);
+    node.* = .{
+        .name = try alloc.dupe(u8, name_buf[0..name_len]),
+        .kind = kind,
+        .created = try getInt(r, u64),
+        .modified = try getInt(r, u64),
+        .parent = parent,
+    };
+    if (parent) |p| try p.children.append(alloc, node);
+
+    switch (kind) {
+        .dir => {
+            const count = try getInt(r, u32);
+            if (count > 4096) return DeserializeError.Corrupt;
+            for (0..count) |_| _ = try deserializeNode(alloc, node, r);
+        },
+        .file => {
+            const len = try getInt(r, u64);
+            if (len > 16 << 20) return DeserializeError.Corrupt;
+            try node.data.resize(alloc, @intCast(len));
+            try r.readAll(node.data.items);
+        },
+    }
+    return node;
+}
 
 // Kernel-global instance, initialised in kmain once the heap is up.
 pub var global: Fs = undefined;
@@ -248,6 +334,53 @@ test "errors: parents, kinds, bad paths" {
     try testing.expectError(Error.NotDir, fs.create("/f/child"));
     try testing.expectError(Error.IsDir, fs.read("/"));
     try testing.expectError(Error.BadPath, fs.mkdir("/"));
+}
+
+const ListWriter = struct {
+    list: *std.ArrayList(u8),
+    alloc: std.mem.Allocator,
+    pub fn writeAll(self: *const ListWriter, bytes: []const u8) !void {
+        try self.list.appendSlice(self.alloc, bytes);
+    }
+};
+
+const SliceReader = struct {
+    data: []const u8,
+    off: usize = 0,
+    pub fn readAll(self: *SliceReader, buf: []u8) !void {
+        if (self.off + buf.len > self.data.len) return error.EndOfStream;
+        @memcpy(buf, self.data[self.off..][0..buf.len]);
+        self.off += buf.len;
+    }
+};
+
+test "snapshot round-trip preserves the tree" {
+    var fs = try testFs();
+    defer deinitTestFs(&fs);
+    _ = try fs.mkdir("/Programs");
+    _ = try fs.mkdir("/Home");
+    _ = try fs.mkdir("/Home/Ideas");
+    try fs.write("/Home/Welcome.txt", "persist me");
+    try fs.write("/Programs/bin", &[_]u8{ 0, 1, 2, 255, 254 });
+
+    var blob: std.ArrayList(u8) = .empty;
+    defer blob.deinit(testing.allocator);
+    try fs.serialize(&ListWriter{ .list = &blob, .alloc = testing.allocator });
+
+    var reader = SliceReader{ .data = blob.items };
+    var restored = try Fs.deserialize(testing.allocator, &reader);
+    defer deinitTestFs(&restored);
+
+    try testing.expectEqualStrings("persist me", try restored.read("/home/welcome.TXT"));
+    try testing.expectEqualSlices(u8, &[_]u8{ 0, 1, 2, 255, 254 }, try restored.read("/Programs/bin"));
+    try testing.expect(restored.lookup("/Home/Ideas").?.kind == .dir);
+    try testing.expectEqualStrings("Welcome.txt", restored.lookup("/home/welcome.txt").?.name);
+    try testing.expectEqual(fs.lookup("/Home/Welcome.txt").?.modified, restored.lookup("/Home/Welcome.txt").?.modified);
+}
+
+test "deserialize rejects corrupt streams" {
+    var junk = SliceReader{ .data = &[_]u8{ 9, 0, 0 } }; // kind 9 = invalid
+    try testing.expectError(error.Corrupt, Fs.deserialize(testing.allocator, &junk));
 }
 
 test "open files cannot be removed" {

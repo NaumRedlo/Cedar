@@ -79,6 +79,10 @@ pub const Dtb = struct {
         return .{ .dtb = self };
     }
 
+    pub fn compatibleRegs(self: *const Dtb, compat: []const u8) CompatRegIterator {
+        return .{ .dtb = self, .it = self.iterator(), .compat = compat };
+    }
+
     // Memory reservation block: (address, size) pairs the kernel must
     // never hand out, terminated by a zero pair.
     pub fn reservations(self: *const Dtb) ReservationIterator {
@@ -216,6 +220,40 @@ pub const ReservationIterator = struct {
     }
 };
 
+// Iterate the first reg pair of EVERY node whose compatible list
+// contains the string (e.g. all "virtio,mmio" transports).
+pub const CompatRegIterator = struct {
+    dtb: *const Dtb,
+    it: Iterator,
+    compat: []const u8,
+
+    pub fn next(self: *CompatRegIterator) ?Reg {
+        var matched = false;
+        var reg_value: ?[]const u8 = null;
+        while (true) {
+            const ev = self.it.next() catch return null;
+            switch (ev) {
+                .begin_node, .end_node => {
+                    if (matched) if (reg_value) |rv| return self.dtb.parseReg(rv);
+                    matched = false;
+                    reg_value = null;
+                },
+                .prop => |p| {
+                    if (std.mem.eql(u8, p.name, "reg")) reg_value = p.value;
+                    if (std.mem.eql(u8, p.name, "compatible")) {
+                        var rest = p.value;
+                        while (std.mem.indexOfScalar(u8, rest, 0)) |nul| {
+                            if (std.mem.eql(u8, rest[0..nul], self.compat)) matched = true;
+                            rest = rest[nul + 1 ..];
+                        }
+                    }
+                },
+                .end => return null,
+            }
+        }
+    }
+};
+
 // GIC interrupt specifier (3 cells: type, number, flags) → INTID.
 // SPIs (type 0) start at 32, PPIs (type 1) at 16.
 pub fn parseGicIrq(value: []const u8) ?u32 {
@@ -331,6 +369,16 @@ test "arbitrary prop by compatible + gic irq parse" {
     try testing.expectEqual(@as(?u32, 33), parseGicIrq(iv)); // SPI 1 -> 32+1
     const fc = dt.findByCompatible("qemu,fw-cfg-mmio") orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(u64, 0x9020000), fc.addr);
+}
+
+test "iterate all nodes by compatible" {
+    const dt = fixture();
+    var it = dt.compatibleRegs("virtio,mmio");
+    const a = it.next() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, 0xa000000), a.addr);
+    const b = it.next() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, 0xa000200), b.addr);
+    try testing.expect(it.next() == null);
 }
 
 test "memory reservation block" {
