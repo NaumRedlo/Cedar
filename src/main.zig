@@ -20,6 +20,7 @@ const user = @import("user.zig");
 const userprogs = @import("userprogs");
 const virtio = @import("virtio.zig");
 const disk = @import("disk.zig");
+const kbd = @import("kbd.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -133,9 +134,9 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
 
                 var vit = dt.compatibleRegs("virtio,mmio");
                 while (vit.next()) |slot| {
-                    if (virtio.probeBlk(mmu.p2v(slot.addr))) {
+                    if (virtio.probeBlk(mmu.p2v(slot.reg.addr))) {
                         kprintf("disk: virtio-blk at 0x{x}, {d} MiB\n", .{
-                            slot.addr, (virtio.capacity_sectors * virtio.SECTOR) >> 20,
+                            slot.reg.addr, (virtio.capacity_sectors * virtio.SECTOR) >> 20,
                         });
                         break;
                     }
@@ -184,6 +185,17 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
                 if (dtb.parseGicIrq(iv)) |id| {
                     input.init(id);
                     kprintf("input: uart rx on intid {d}\n", .{id});
+                }
+            }
+
+            // And the virtio keyboard, so typing into the QEMU window works.
+            var kit = dt.compatibleRegs("virtio,mmio");
+            while (kit.next()) |slot| {
+                const irq = slot.intid orelse continue;
+                if (kbd.probe(mmu.p2v(slot.reg.addr), irq)) {
+                    gic.enableIrq(irq);
+                    kprintf("input: virtio keyboard at 0x{x}, intid {d}\n", .{ slot.reg.addr, irq });
+                    break;
                 }
             }
 

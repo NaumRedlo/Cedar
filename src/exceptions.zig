@@ -4,6 +4,7 @@ const gic = @import("gic.zig");
 const timer = @import("timer.zig");
 const sched = @import("sched.zig");
 const input = @import("input.zig");
+const kbd = @import("kbd.zig");
 
 extern var exception_vectors: u8;
 
@@ -104,6 +105,8 @@ fn dispatchIrq(frame: *Frame) *Frame {
             timer.onIrq();
         } else if (intid == input.intid) {
             input.onIrq();
+        } else if (intid == kbd.intid) {
+            kbd.onIrq();
         } else {
             log.kprintf("irq: unexpected intid {d}\n", .{intid});
         }

@@ -19,15 +19,18 @@ pub fn init(irq_intid: u32) void {
     gic.enableIrq(intid);
 }
 
+// IRQ context: push one byte from any source (UART, virtio keyboard).
+pub fn pushByte(b: u8) void {
+    const next = (head + 1) % ring.len;
+    if (next == tail) return; // full: drop
+    ring[head] = b;
+    head = next;
+    available.signal();
+}
+
 // IRQ context: drain the RX FIFO into the ring.
 pub fn onIrq() void {
-    while (arch.uartReadByte()) |b| {
-        const next = (head + 1) % ring.len;
-        if (next == tail) return; // full: drop the rest
-        ring[head] = b;
-        head = next;
-        available.signal();
-    }
+    while (arch.uartReadByte()) |b| pushByte(b);
 }
 
 // Thread context: block until a byte arrives.

@@ -220,26 +220,41 @@ pub const ReservationIterator = struct {
     }
 };
 
-// Iterate the first reg pair of EVERY node whose compatible list
-// contains the string (e.g. all "virtio,mmio" transports).
+pub const Device = struct {
+    reg: Reg,
+    intid: ?u32, // parsed GIC interrupt, when the node declares one
+};
+
+// Iterate EVERY node whose compatible list contains the string
+// (e.g. all "virtio,mmio" transports), yielding reg + interrupt.
 pub const CompatRegIterator = struct {
     dtb: *const Dtb,
     it: Iterator,
     compat: []const u8,
 
-    pub fn next(self: *CompatRegIterator) ?Reg {
+    pub fn next(self: *CompatRegIterator) ?Device {
         var matched = false;
         var reg_value: ?[]const u8 = null;
+        var irq_value: ?[]const u8 = null;
         while (true) {
             const ev = self.it.next() catch return null;
             switch (ev) {
                 .begin_node, .end_node => {
-                    if (matched) if (reg_value) |rv| return self.dtb.parseReg(rv);
+                    if (matched) if (reg_value) |rv| {
+                        if (self.dtb.parseReg(rv)) |reg| {
+                            return .{
+                                .reg = reg,
+                                .intid = if (irq_value) |iv| parseGicIrq(iv) else null,
+                            };
+                        }
+                    };
                     matched = false;
                     reg_value = null;
+                    irq_value = null;
                 },
                 .prop => |p| {
                     if (std.mem.eql(u8, p.name, "reg")) reg_value = p.value;
+                    if (std.mem.eql(u8, p.name, "interrupts")) irq_value = p.value;
                     if (std.mem.eql(u8, p.name, "compatible")) {
                         var rest = p.value;
                         while (std.mem.indexOfScalar(u8, rest, 0)) |nul| {
@@ -375,9 +390,11 @@ test "iterate all nodes by compatible" {
     const dt = fixture();
     var it = dt.compatibleRegs("virtio,mmio");
     const a = it.next() orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(@as(u64, 0xa000000), a.addr);
+    try testing.expectEqual(@as(u64, 0xa000000), a.reg.addr);
+    try testing.expectEqual(@as(?u32, 48), a.intid); // SPI 16 -> 32+16
     const b = it.next() orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(@as(u64, 0xa000200), b.addr);
+    try testing.expectEqual(@as(u64, 0xa000200), b.reg.addr);
+    try testing.expectEqual(@as(?u32, 49), b.intid);
     try testing.expect(it.next() == null);
 }
 
