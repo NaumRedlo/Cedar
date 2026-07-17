@@ -1,8 +1,8 @@
-# 🌲 Cedar OS
+# 🌲 Cedar
 
 > A modern, monolithic operating system written from scratch in **Zig** for the **ARM64 (AArch64)** architecture.
 
-Cedar OS is a hobby operating system focused on clarity, reliability, and learning. It is built from the ground up without relying on existing kernels — or even a bootloader — featuring strict memory isolation, a preemptive scheduler, a custom filesystem, and an isolated EL0 userspace runtime.
+Cedar is a hobby operating system focused on clarity, reliability, and learning. It is built from the ground up without relying on existing kernels — or even a bootloader — featuring strict memory isolation, a preemptive scheduler, a custom filesystem, and an isolated EL0 userspace runtime.
 
 ---
 
@@ -106,7 +106,7 @@ Snapshots are written to the virtual disk image and automatically restored durin
 ## 🖥️ Console, Keyboard & Shell
 
 - **Framebuffer console**: a ramfb display (1024×768) configured through QEMU's fw_cfg channel; every line of kernel output is mirrored to the screen with a built-in bitmap font.
-- **Keyboard**: type directly into the QEMU window — a virtio-input driver translates evdev key events (US layout, shift supported) — or over serial via PL011 receive interrupts. Both sources feed one ring buffer; a keypress wakes the shell instantly.
+- **Keyboard**: PL011 UART receive interrupts feed a ring buffer; a keypress wakes the shell instantly.
 - **Interactive shell** at the `cedar>` prompt:
   - system: `help`, `about`, `uptime`, `mem`, `clear`, `ps`, `save`
   - files: `ls`, `cat`, `write`, `mkdir`, `rm`
@@ -172,14 +172,13 @@ Kernel execution continues normally.
 | Interrupt Controller | GICv2 |
 | UART | PL011 |
 | Display | ramfb via fw_cfg |
-| Keyboard | VirtIO Input + PL011 serial |
 | Storage | VirtIO Block |
 
 ---
 
 # 📸 Demo
 
-![Cedar shell on the framebuffer console](docs/screenshot.png)
+![Cedar Shell on the framebuffer console](docs/screenshot.png)
 
 Example session:
 
@@ -193,7 +192,7 @@ cedar> write /Home/note.txt Hello from Cedar OS!
 20 bytes -> /Home/note.txt
 
 cedar> run /Programs/cat /Home/note.txt
-Hello from Cedar OS!
+Hello from Cedar!
 sched: 'cat' exited (code 0)
 
 cedar> save
@@ -219,7 +218,7 @@ Build and launch immediately:
 zig build run
 ```
 
-A QEMU window opens with the Cedar screen — click it and type. (The terminal you launched from works too: serial input goes to the same shell.) A 16 MiB `disk.img` for snapshots is created automatically on first run.
+A QEMU window opens with the Cedar screen; type commands in the terminal you launched from (input goes over serial). A 16 MiB `disk.img` for snapshots is created automatically on first run.
 
 Run the host-side unit tests (FS, DTB parser, frame allocator):
 
@@ -243,6 +242,7 @@ Current goals include:
 
 Future plans may include:
 
+- typing directly into the QEMU window (virtio-input)
 - Raspberry Pi hardware support
 - SMP (multi-core scheduling)
 - networking
@@ -253,4 +253,4 @@ Future plans may include:
 
 ## License
 
-*TODO: choose a license before publishing (MIT, BSD-2-Clause, Apache-2.0, GPL, ...).*
+Cedar is licensed under the [GNU General Public License v3.0](LICENSE) (GPLv3). Any distributed derivative work — forks, ports, redistributions — must stay open source under GPLv3 as well.
