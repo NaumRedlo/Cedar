@@ -56,8 +56,9 @@ pub fn build(b: *std.Build) void {
     kernel.pie = false;
     b.installArtifact(kernel);
 
-    // Userland programs: freestanding EL0 flat binaries, embedded into
-    // the kernel and installed into /Programs at boot.
+    // Userland programs: freestanding EL0 ELF executables, embedded into
+    // the kernel and installed into /Programs at boot. The kernel's ELF
+    // loader maps their segments at run time.
     const wf = b.addWriteFiles();
     var embed_source: []const u8 = "";
     for ([_][]const u8{ "hello", "crash", "reader", "cat" }) |prog| {
@@ -73,9 +74,8 @@ pub fn build(b: *std.Build) void {
         exe.setLinkerScript(b.path("userland/user.ld"));
         exe.entry = .{ .symbol_name = "_start" };
         exe.pie = false;
-        const bin = exe.addObjCopy(.{ .format = .bin });
-        _ = wf.addCopyFile(bin.getOutput(), b.fmt("{s}.bin", .{prog}));
-        embed_source = b.fmt("{s}pub const {s} = @embedFile(\"{s}.bin\");\n", .{ embed_source, prog, prog });
+        _ = wf.addCopyFile(exe.getEmittedBin(), b.fmt("{s}.elf", .{prog}));
+        embed_source = b.fmt("{s}pub const {s} = @embedFile(\"{s}.elf\");\n", .{ embed_source, prog, prog });
     }
     const embed_file = wf.add("userprogs.zig", embed_source);
     kernel.root_module.addAnonymousImport("userprogs", .{ .root_source_file = embed_file });
@@ -111,7 +111,7 @@ pub fn build(b: *std.Build) void {
     // Pure-logic modules (DTB parser, frame allocator) are unit-tested
     // on the host.
     const test_step = b.step("test", "Run host unit tests");
-    for ([_][]const u8{ "src/dtb.zig", "src/pmm.zig", "src/fs.zig" }) |file| {
+    for ([_][]const u8{ "src/dtb.zig", "src/pmm.zig", "src/fs.zig", "src/elf.zig" }) |file| {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path(file),

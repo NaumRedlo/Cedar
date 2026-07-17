@@ -11,8 +11,12 @@ const std = @import("std");
 const mem = @import("mem.zig");
 const mmu = @import("mmu.zig");
 const sched = @import("sched.zig");
+const elf = @import("elf.zig");
 
 // Fixed user layout (all inside L1[0], the low 1 GiB of the VA space).
+// ELF segments load at their own vaddrs (our programs link at CODE_VA);
+// the stack sits at the top of the low region. Pointers a process is
+// allowed to hand the kernel must fall in [CODE_VA, STACK_TOP).
 pub const CODE_VA: u64 = 0x1000_0000;
 pub const STACK_TOP: u64 = 0x2000_0000;
 pub const STACK_PAGES: usize = 4;
@@ -27,8 +31,17 @@ const AP_EL0_RW: u64 = 1 << 6;
 const PXN: u64 = 1 << 53;
 const UXN: u64 = 1 << 54;
 
-const CODE_FLAGS = VALID_PAGE | AF | SH_INNER | ATTR_NORMAL | AP_EL0_RO | PXN;
 const STACK_FLAGS = VALID_PAGE | AF | SH_INNER | ATTR_NORMAL | AP_EL0_RW | PXN | UXN;
+
+// Page permissions for an ELF segment. AP only distinguishes RO/RW;
+// UXN gates EL0 execution. Kernel execution of user pages is always
+// forbidden (PXN).
+fn segmentFlags(f: u32) u64 {
+    var bits: u64 = VALID_PAGE | AF | SH_INNER | ATTR_NORMAL | PXN;
+    bits |= if (f & elf.PF_W != 0) AP_EL0_RW else AP_EL0_RO;
+    if (f & elf.PF_X == 0) bits |= UXN;
+    return bits;
+}
 
 var kernel_low_table: u64 = 0;
 
@@ -58,6 +71,20 @@ pub fn init() bool {
     return true;
 }
 
+// A secondary core adopts the empty kernel-low table as its default
+// TTBR0 (walks stay enabled), so null dereferences fault there too
+// while it runs kernel threads. Called once per secondary from smp.
+pub fn adoptSecondaryCore() void {
+    asm volatile (
+        \\msr ttbr0_el1, %[t]
+        \\tlbi vmalle1
+        \\dsb nsh
+        \\isb
+        :
+        : [t] "r" (kernel_low_table),
+        : .{ .memory = true });
+}
+
 fn indices(va: u64) [3]usize {
     return .{
         @intCast((va >> 30) & 511),
@@ -82,14 +109,96 @@ const AddressSpace = struct {
                 const next = zeroTable() orelse return false;
                 level[i] = next | 0b11; // table descriptor
             }
-            level = table(level[i] & 0x0000_ffff_ffff_f000);
+            level = table(level[i] & ADDR_MASK);
         }
         level[idx[2]] = phys | flags;
         return true;
     }
+
+    // Physical frame already mapped at `va`, if any — so two ELF
+    // segments sharing a page reuse the same frame.
+    fn frameAt(self: *AddressSpace, va: u64) ?u64 {
+        const idx = indices(va);
+        var level = table(self.root);
+        for (idx[0..2]) |i| {
+            if (level[i] & 1 == 0) return null;
+            level = table(level[i] & ADDR_MASK);
+        }
+        const leaf = level[idx[2]];
+        if (leaf & 1 == 0) return null;
+        return leaf & ADDR_MASK;
+    }
+
+    // Map one ELF PT_LOAD segment: page-granular frames, file bytes
+    // copied into place, the tail (mem_size > file_size) left zero.
+    fn loadSegment(self: *AddressSpace, image: []const u8, seg: elf.Segment) LoadError!void {
+        const flags = segmentFlags(seg.flags);
+        const page_start = std.mem.alignBackward(u64, seg.vaddr, mem.PAGE_SIZE);
+        const page_end = std.mem.alignForward(u64, seg.vaddr + seg.mem_size, mem.PAGE_SIZE);
+
+        var va = page_start;
+        while (va < page_end) : (va += mem.PAGE_SIZE) {
+            const frame = self.frameAt(va) orelse blk: {
+                const f = mem.frames.allocContiguous(1) orelse return error.NoMemory;
+                @memset(@as([*]u8, @ptrFromInt(mmu.p2v(f)))[0..mem.PAGE_SIZE], 0);
+                if (!self.mapPage(va, f, flags)) return error.NoMemory;
+                break :blk f;
+            };
+            const page_va = mmu.p2v(frame);
+            const page = @as([*]u8, @ptrFromInt(page_va))[0..mem.PAGE_SIZE];
+
+            // Copy the portion of the segment's file image on this page.
+            const file_lo = @max(va, seg.vaddr);
+            const file_hi = @min(va + mem.PAGE_SIZE, seg.vaddr + seg.file_size);
+            if (file_lo < file_hi) {
+                const src_off = seg.file_off + (file_lo - seg.vaddr);
+                const dst_off = file_lo - va;
+                const len = file_hi - file_lo;
+                if (src_off + len > image.len) return error.TooBig;
+                @memcpy(page[dst_off..][0..len], image[@intCast(src_off)..][0..@intCast(len)]);
+            }
+
+            // Clean this page (written via the direct map) to the point
+            // of unification, so instruction fetch sees the new bytes.
+            if (seg.flags & elf.PF_X != 0) cleanDCacheToPoU(page_va, mem.PAGE_SIZE);
+        }
+    }
 };
 
-pub const LoadError = error{ NoMemory, TooBig };
+fn cacheLine() u64 {
+    const ctr = asm volatile ("mrs %[out], ctr_el0"
+        : [out] "=r" (-> u64),
+    );
+    // CTR_EL0.DminLine (bits 19:16): log2 of the smallest D-cache line
+    // in words. Line size in bytes = 4 << DminLine.
+    return @as(u64, 4) << @intCast((ctr >> 16) & 0xf);
+}
+
+fn cleanDCacheToPoU(va: u64, len: u64) void {
+    const line = cacheLine();
+    var p = std.mem.alignBackward(u64, va, line);
+    const end = va + len;
+    while (p < end) : (p += line) {
+        asm volatile ("dc cvau, %[p]"
+            :
+            : [p] "r" (p),
+            : .{ .memory = true });
+    }
+    asm volatile ("dsb ish" ::: .{ .memory = true });
+}
+
+// Finish code loading: publish page tables and invalidate every core's
+// instruction cache so the fresh code is fetched correctly anywhere.
+fn syncInstructionCache() void {
+    asm volatile (
+        \\dsb ish
+        \\ic ialluis
+        \\dsb ish
+        \\isb
+        ::: .{ .memory = true });
+}
+
+pub const LoadError = error{ NoMemory, TooBig } || elf.Error;
 
 pub const Image = struct {
     ttbr0: u64,
@@ -99,25 +208,30 @@ pub const Image = struct {
     argv: u64, // user VA of the pointer array
 };
 
-// Build a fresh address space: copy `code` to CODE_VA, set up a stack,
-// and place the argv block (pointer array + NUL-terminated strings) at
-// the very top of the stack, System V style. x0/x1 for the entry come
-// back as argc/argv.
-pub fn load(code: []const u8, args: []const []const u8) LoadError!Image {
-    const code_pages = (code.len + mem.PAGE_SIZE - 1) / mem.PAGE_SIZE;
+// Build a fresh address space from an ELF64 executable: map its
+// PT_LOAD segments with per-segment permissions, set up a stack, and
+// place the argv block (pointer array + NUL-terminated strings) at the
+// top of the stack, System V style. x0/x1 for the entry are argc/argv.
+pub fn load(image: []const u8, args: []const []const u8) LoadError!Image {
+    const exe = try elf.Elf.parse(image);
 
     var as = AddressSpace{ .root = zeroTable() orelse return error.NoMemory };
 
-    // Code: fresh frames, copied through the direct map, mapped RO+X.
-    for (0..code_pages) |p| {
-        const frame = mem.frames.allocContiguous(1) orelse return error.NoMemory;
-        const dst = @as([*]u8, @ptrFromInt(mmu.p2v(frame)))[0..mem.PAGE_SIZE];
-        const off = p * mem.PAGE_SIZE;
-        const n = @min(mem.PAGE_SIZE, code.len - off);
-        @memcpy(dst[0..n], code[off .. off + n]);
-        if (n < mem.PAGE_SIZE) @memset(dst[n..], 0);
-        if (!as.mapPage(CODE_VA + off, frame, CODE_FLAGS)) return error.NoMemory;
+    var segs = exe.segments();
+    while (segs.next()) |seg| {
+        // Programs live in the low user window, never over the stack.
+        if (seg.vaddr < CODE_VA or seg.vaddr + seg.mem_size > STACK_TOP - STACK_PAGES * mem.PAGE_SIZE) {
+            return error.TooBig;
+        }
+        try as.loadSegment(image, seg);
     }
+
+    // We wrote the program's code as data (through the direct map) but
+    // it will be fetched as instructions, possibly on another core.
+    // Clean it to the point of unification and invalidate the I-cache
+    // inner-shareable so every core fetches the fresh bytes; the dsb
+    // also publishes the new page tables to other cores' walkers.
+    syncInstructionCache();
 
     // Stack: zeroed frames mapped RW below STACK_TOP.
     var top_page: [*]u8 = undefined;
@@ -151,7 +265,7 @@ pub fn load(code: []const u8, args: []const []const u8) LoadError!Image {
 
     return .{
         .ttbr0 = as.root,
-        .entry = CODE_VA,
+        .entry = exe.entry,
         .sp = block_va,
         .argc = args.len,
         .argv = block_va,

@@ -11,6 +11,7 @@ const timer = @import("timer.zig");
 const gic = @import("gic.zig");
 const exceptions = @import("exceptions.zig");
 const log = @import("log.zig");
+const user = @import("user.zig");
 
 const MAX_CPUS = sched.MAX_CPUS;
 const STACK_PAGES = 4;
@@ -65,6 +66,7 @@ pub fn startCores(method: []const u8, want: u8) void {
 // First code each secondary core runs (from boot.S, on its own stack).
 export fn secondaryMain(cpu: u64) callconv(.c) noreturn {
     exceptions.install();
+    user.adoptSecondaryCore(); // empty low table: keep null-fault protection
     gic.initCpu(); // this core's GIC CPU interface + priority mask
     sched.adoptIdle(cpu, idleName(cpu));
 

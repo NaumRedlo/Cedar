@@ -131,7 +131,10 @@ Every userspace process executes in its own hardware-isolated EL0 address space 
 
 ### Program Execution
 
-Supports passing arguments System V style.
+Programs are **ELF64 executables** loaded from the filesystem: the
+kernel parses their program headers and maps each `PT_LOAD` segment
+with its own permissions (R / W / X), then jumps to the ELF entry
+point. Arguments are passed System V style.
 
 Example:
 

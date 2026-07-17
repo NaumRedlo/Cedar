@@ -166,13 +166,10 @@ secondary_start:
 
 .section .text
 secondary_high:
-    // Higher half now: disable TTBR0 walks like the primary did.
-    mrs     x1, tcr_el1
-    orr     x1, x1, #(1 << 7)     // EPD0
-    msr     tcr_el1, x1
-    tlbi    vmalle1
-    dsb     nsh
-    isb
+    // Higher half now. Unlike the primary, this core leaves TTBR0 walks
+    // ENABLED: user processes are scheduled here and need their low-half
+    // mappings. secondaryMain loads the empty kernel-low table so null
+    // dereferences still fault while a kernel thread runs.
 
     // Per-core stack: secondary_stacks[cpu], set up by smp.startCores.
     adrp    x1, secondary_stacks
