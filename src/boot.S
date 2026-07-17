@@ -1,6 +1,6 @@
 // Cedar boot stub — the first code that runs. No bootloader: QEMU's
-// -kernel loader (or, later, the Raspberry Pi firmware) places this
-// image in RAM and jumps to the first instruction.
+// -kernel loader places this image in RAM and jumps to the first
+// instruction.
 //
 // This stub now owns the MMU bring-up: it builds a single L1 table
 // (1 GiB blocks: device GB0, normal RAM GBs 1-8) used by BOTH TTBR0

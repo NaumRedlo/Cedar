@@ -3,7 +3,7 @@
 //
 // Currently dormant: with the move to direct kernel-image boot there is
 // no framebuffer provider yet. It returns once Cedar drives the display
-// itself (fw_cfg/ramfb on QEMU virt, mailbox on Raspberry Pi).
+// itself (fw_cfg/ramfb on QEMU virt).
 
 const font = @import("font8x8.zig");
 

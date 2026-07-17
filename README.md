@@ -11,7 +11,7 @@ Cedar is a hobby operating system focused on clarity, reliability, and learning.
 ## 🏗️ Boot & Kernel Space (EL1)
 
 - **No Bootloader**
-  - The kernel is a raw image with a Linux arm64 boot header, loaded directly by QEMU's `-kernel` (and, in the future, by the Raspberry Pi firmware as `kernel8.img`).
+  - The kernel is a raw image with a Linux arm64 boot header, loaded directly by QEMU's `-kernel`.
   - Every instruction from `_start` on is Cedar's own code: page tables and the MMU are brought up in the boot stub itself.
 
 - **Higher-Half Kernel**
@@ -251,7 +251,6 @@ Current goals include:
 
 Future plans may include:
 
-- Raspberry Pi hardware support
 - networking
 - graphical desktop environment
 - ELF program loading

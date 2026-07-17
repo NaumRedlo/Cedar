@@ -1,11 +1,10 @@
 const std = @import("std");
 
-// Cedar is ARM-only by design: aarch64 is the sole supported architecture
-// (Apple Silicon via QEMU/HVF, Raspberry Pi hardware later).
+// Cedar is ARM-only and QEMU-only by design: aarch64 on qemu-system-
+// aarch64's `virt` machine is the sole supported target.
 //
-// No bootloader: the kernel is a raw image with a Linux arm64 boot header,
-// loaded directly by QEMU's -kernel (and later by the Raspberry Pi
-// firmware as kernel8.img).
+// No bootloader: the kernel is a raw image with a Linux arm64 boot
+// header, loaded directly by QEMU's -kernel.
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
@@ -81,7 +80,7 @@ pub fn build(b: *std.Build) void {
     const embed_file = wf.add("userprogs.zig", embed_source);
     kernel.root_module.addAnonymousImport("userprogs", .{ .root_source_file = embed_file });
 
-    // Strip the ELF container down to the raw bytes QEMU/RPi firmware load.
+    // Strip the ELF container down to the raw bytes QEMU's -kernel loads.
     const image = kernel.addObjCopy(.{ .format = .bin });
     const install_image = b.addInstallBinFile(image.getOutput(), "cedar.img");
     b.getInstallStep().dependOn(&install_image.step);

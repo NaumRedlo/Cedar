@@ -2,9 +2,8 @@
 // machine, reached via the higher-half direct map (low addresses are
 // not mapped at all once boot.S disables TTBR0). Halt via wfi.
 //
-// 0x0900_0000 is where the virt machine places the PL011; on real
-// boards (Raspberry Pi) the base differs and comes from the device
-// tree once Cedar parses it.
+// 0x0900_0000 is where the virt machine places the PL011; the actual
+// base is taken from the device tree at boot regardless.
 
 const mmu = @import("../mmu.zig");
 
