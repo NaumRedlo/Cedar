@@ -120,3 +120,28 @@ pub fn load(code: []const u8) LoadError!struct { ttbr0: u64, entry: u64, sp: u64
 
     return .{ .ttbr0 = as.root, .entry = CODE_VA, .sp = STACK_TOP };
 }
+
+const ADDR_MASK: u64 = 0x0000_ffff_ffff_f000;
+
+fn freeLevel(phys: u64, level: u32) void {
+    const t = @as([*]volatile u64, @ptrFromInt(mmu.p2v(phys)))[0..512];
+    for (t) |entry| {
+        if (entry & 1 == 0) continue;
+        const next = entry & ADDR_MASK;
+        if (level < 3) {
+            // L1/L2 valid entries are always table descriptors here.
+            freeLevel(next, level + 1);
+        } else {
+            // L3 leaf: the mapped code/stack frame.
+            mem.frames.free(next);
+        }
+    }
+    mem.frames.free(phys);
+}
+
+// Return every frame owned by a process address space: its mapped
+// pages and all three levels of page table. The table must not be the
+// live TTBR0 when this runs (the reaper guarantees it).
+pub fn destroy(ttbr0: u64) void {
+    freeLevel(ttbr0, 1);
+}

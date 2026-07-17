@@ -13,6 +13,7 @@ const log = @import("log.zig");
 const timer = @import("timer.zig");
 const arch = @import("arch.zig").impl;
 const mmu = @import("mmu.zig");
+const user = @import("user.zig");
 
 const Frame = exceptions.Frame;
 
@@ -50,7 +51,29 @@ pub const SpawnError = error{ NoSlot, NoMemory };
 // SPSR for a fresh EL0 process: EL0t, IRQs enabled, D/A/F masked.
 const USER_SPSR: u64 = 0x340;
 
+// Free a finished thread's resources and return its slot to the pool.
+// Must never run while executing on the thread's own kernel stack or
+// with its TTBR0 live — callers guarantee the thread is not `current`.
+fn reapThread(t: *Thread) void {
+    if (t.stack_base != 0) {
+        for (0..STACK_PAGES) |p| mem.frames.free(t.stack_base + p * mem.PAGE_SIZE);
+    }
+    if (t.ttbr0) |root| user.destroy(root);
+    t.* = .{}; // back to .unused
+}
+
+// Sweep finished threads other than the current one. Deferred by
+// design: a thread that just exited is still `current` during its own
+// reschedule and only gets reaped on a later one, by which point we are
+// running on a different stack with a different TTBR0.
+fn reapFinished() void {
+    for (&threads, 0..) |*t, i| {
+        if (i != current and t.state == .finished) reapThread(t);
+    }
+}
+
 fn allocSlot(name: []const u8) SpawnError!struct { slot: usize, kstack_top: u64 } {
+    reapFinished();
     const slot = for (&threads, 0..) |*t, i| {
         if (t.state == .unused) break i;
     } else return error.NoSlot;
@@ -170,6 +193,7 @@ pub fn ps() void {
 pub fn reschedule(frame: *Frame) *Frame {
     if (!started) return frame;
 
+    reapFinished();
     wakeExpired();
 
     threads[current].context = frame;
