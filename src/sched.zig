@@ -113,13 +113,16 @@ pub fn spawn(name: []const u8, entry: *const fn () callconv(.c) void) SpawnError
 
 // A process: erets to EL0 at entry_va on its own TTBR0 table; exceptions
 // from EL0 land on the thread's kernel stack (SP_EL1 = kstack top).
-pub fn spawnUser(name: []const u8, ttbr0: u64, entry_va: u64, user_sp: u64) SpawnError!void {
+// x0/x1 arrive at _start as argc/argv.
+pub fn spawnUser(name: []const u8, img: user.Image) SpawnError!void {
     const s = try allocSlot(name);
 
     const frame: *Frame = @ptrFromInt(s.kstack_top - @sizeOf(Frame));
-    frame.* = .{ .x = @splat(0), .elr = entry_va, .spsr = USER_SPSR, .sp_el0 = user_sp };
+    frame.* = .{ .x = @splat(0), .elr = img.entry, .spsr = USER_SPSR, .sp_el0 = img.sp };
+    frame.x[0] = img.argc;
+    frame.x[1] = img.argv;
     threads[s.slot].context = frame;
-    threads[s.slot].ttbr0 = ttbr0;
+    threads[s.slot].ttbr0 = img.ttbr0;
 }
 
 fn threadExit() callconv(.c) noreturn {

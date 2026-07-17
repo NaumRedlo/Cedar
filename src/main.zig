@@ -50,6 +50,7 @@ fn initFs() void {
             try fs.global.write("/Programs/hello", userprogs.hello);
             try fs.global.write("/Programs/crash", userprogs.crash);
             try fs.global.write("/Programs/reader", userprogs.reader);
+            try fs.global.write("/Programs/cat", userprogs.cat);
         }
     };
     boot.run() catch {

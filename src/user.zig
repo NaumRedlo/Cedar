@@ -91,9 +91,19 @@ const AddressSpace = struct {
 
 pub const LoadError = error{ NoMemory, TooBig };
 
-// Build a fresh address space, copy `code` to CODE_VA, and set up a
-// stack. Returns (ttbr0, entry_va, user_sp) ready for sched.spawnUser.
-pub fn load(code: []const u8) LoadError!struct { ttbr0: u64, entry: u64, sp: u64 } {
+pub const Image = struct {
+    ttbr0: u64,
+    entry: u64,
+    sp: u64,
+    argc: u64,
+    argv: u64, // user VA of the pointer array
+};
+
+// Build a fresh address space: copy `code` to CODE_VA, set up a stack,
+// and place the argv block (pointer array + NUL-terminated strings) at
+// the very top of the stack, System V style. x0/x1 for the entry come
+// back as argc/argv.
+pub fn load(code: []const u8, args: []const []const u8) LoadError!Image {
     const code_pages = (code.len + mem.PAGE_SIZE - 1) / mem.PAGE_SIZE;
 
     var as = AddressSpace{ .root = zeroTable() orelse return error.NoMemory };
@@ -110,15 +120,42 @@ pub fn load(code: []const u8) LoadError!struct { ttbr0: u64, entry: u64, sp: u64
     }
 
     // Stack: zeroed frames mapped RW below STACK_TOP.
+    var top_page: [*]u8 = undefined;
     for (0..STACK_PAGES) |p| {
         const frame = mem.frames.allocContiguous(1) orelse return error.NoMemory;
         const page = @as([*]u8, @ptrFromInt(mmu.p2v(frame)))[0..mem.PAGE_SIZE];
         @memset(page, 0);
         const va = STACK_TOP - (p + 1) * mem.PAGE_SIZE;
         if (!as.mapPage(va, frame, STACK_FLAGS)) return error.NoMemory;
+        if (p == 0) top_page = page.ptr;
     }
 
-    return .{ .ttbr0 = as.root, .entry = CODE_VA, .sp = STACK_TOP };
+    // argv block: [argv[0..argc], NULL] then the string bytes, written
+    // through the direct map before the process ever runs.
+    var total: usize = (args.len + 1) * 8;
+    for (args) |a| total += a.len + 1;
+    total = std.mem.alignForward(usize, total, 16);
+    if (total > mem.PAGE_SIZE) return error.TooBig;
+
+    const block_va = STACK_TOP - total;
+    const off0 = mem.PAGE_SIZE - total;
+    const ptrs = @as([*]align(1) u64, @ptrCast(top_page + off0));
+    var str_off = off0 + (args.len + 1) * 8;
+    for (args, 0..) |a, i| {
+        ptrs[i] = block_va + (str_off - off0);
+        @memcpy(top_page[str_off .. str_off + a.len], a);
+        top_page[str_off + a.len] = 0;
+        str_off += a.len + 1;
+    }
+    ptrs[args.len] = 0;
+
+    return .{
+        .ttbr0 = as.root,
+        .entry = CODE_VA,
+        .sp = block_va,
+        .argc = args.len,
+        .argv = block_va,
+    };
 }
 
 const ADDR_MASK: u64 = 0x0000_ffff_ffff_f000;

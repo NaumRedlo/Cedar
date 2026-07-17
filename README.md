@@ -27,11 +27,13 @@ block on a counting semaphore, all without burning CPU. On top of that:
 a ramfb framebuffer console (all kernel output mirrors to the screen),
 keyboard input over the PL011 RX interrupt, an interactive shell, Cedar
 FS (in-RAM, case-insensitive/case-preserving, /System /Programs /Home),
-and **userspace**: `run /Programs/hello` loads a flat binary from the
-FS into its own EL0 address space. Syscalls: write, sleep, exit, ticks,
-and open/read/close over Cedar FS with per-process file descriptors.
-A faulting process is killed with a diagnostic; the kernel survives,
-and every frame the process owned returns to the allocator.
+and **userspace**: `run /Programs/cat /Home/note.txt` loads a flat
+binary from the FS into its own EL0 address space, with arguments
+delivered System V style — an argv block on the user stack, argc/argv
+in x0/x1. Syscalls: write, sleep, exit, ticks, and open/read/close
+over Cedar FS with per-process file descriptors. A faulting process is
+killed with a diagnostic; the kernel survives, and every frame the
+process owned returns to the allocator.
 
 ## Prerequisites
 

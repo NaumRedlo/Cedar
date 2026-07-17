@@ -83,7 +83,7 @@ fn execute(line: []const u8) void {
     } else if (std.mem.eql(u8, cmd, "ps")) {
         sched.ps();
     } else if (std.mem.eql(u8, cmd, "run")) {
-        cmdRun(it.next() orelse return kprint("usage: run <path>\n"));
+        cmdRun(&it);
     } else {
         kprintf("unknown command: '{s}' (try 'help')\n", .{cmd});
     }
@@ -133,16 +133,29 @@ fn cmdWrite(path: []const u8, text: []const u8) void {
     kprintf("{d} bytes -> {s}\n", .{ text.len, path });
 }
 
-fn cmdRun(path: []const u8) void {
+fn cmdRun(it: *std.mem.TokenIterator(u8, .scalar)) void {
+    const path = it.next() orelse return kprint("usage: run <path> [args...]\n");
     if (!fsReady()) return;
     const bytes = fs.global.read(path) catch |e| return kprintf("run: {s}: {s}\n", .{ path, @errorName(e) });
     if (bytes.len == 0) return kprint("run: empty file\n");
 
-    const img = user.load(bytes) catch |e| return kprintf("run: load failed: {s}\n", .{@errorName(e)});
+    // argv[0] is the path, by convention; up to 7 more arguments. The
+    // strings are copied onto the user stack inside load(), so the
+    // shell's line buffer can be reused right after.
+    var args: [8][]const u8 = undefined;
+    args[0] = path;
+    var argc: usize = 1;
+    while (it.next()) |tok| {
+        if (argc == args.len) break;
+        args[argc] = tok;
+        argc += 1;
+    }
+
+    const img = user.load(bytes, args[0..argc]) catch |e| return kprintf("run: load failed: {s}\n", .{@errorName(e)});
     // The shell's line buffer is reused; the process name must outlive it.
     const base = if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| path[i + 1 ..] else path;
     const name = heap.allocator().dupe(u8, base) catch "user";
-    sched.spawnUser(name, img.ttbr0, img.entry, img.sp) catch |e| {
+    sched.spawnUser(name, img) catch |e| {
         kprintf("run: spawn failed: {s}\n", .{@errorName(e)});
         return;
     };
