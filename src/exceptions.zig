@@ -102,7 +102,7 @@ fn dispatchIrq(frame: *Frame) *Frame {
         const intid = gic.ack();
         if (intid >= gic.SPURIOUS) break;
         if (intid == timer.INTID) {
-            timer.onIrq();
+            timer.onIrq(arch.cpuId() == 0);
         } else if (intid == input.intid) {
             input.onIrq();
         } else if (intid == kbd.intid) {

@@ -11,6 +11,8 @@ const fs = @import("fs.zig");
 const sched = @import("sched.zig");
 const user = @import("user.zig");
 const heap = @import("heap.zig");
+const arch = @import("arch.zig").impl;
+const smp = @import("smp.zig");
 const disk = @import("disk.zig");
 
 const kprint = log.kprint;
@@ -58,7 +60,7 @@ fn execute(line: []const u8) void {
     const cmd = it.next() orelse return;
 
     if (std.mem.eql(u8, cmd, "help")) {
-        kprint("system: help, about, uptime, mem, clear, ps, save\n");
+        kprint("system: help, about, uptime, mem, clear, ps, save, smp, spin\n");
         kprint("files:  ls [path], cat <path>, write <path> <text>, mkdir <path>, rm <path>\n");
         kprint("proc:   run <path> [args...]\n");
     } else if (std.mem.eql(u8, cmd, "about")) {
@@ -83,6 +85,10 @@ fn execute(line: []const u8) void {
         cmdWrite(path, std.mem.trimStart(u8, it.rest(), " "));
     } else if (std.mem.eql(u8, cmd, "ps")) {
         sched.ps();
+    } else if (std.mem.eql(u8, cmd, "smp")) {
+        kprintf("{d} cpu(s) online; this shell is on cpu{d}\n", .{ smp.onlineCount(), arch.cpuId() });
+    } else if (std.mem.eql(u8, cmd, "spin")) {
+        cmdSpin();
     } else if (std.mem.eql(u8, cmd, "save")) {
         if (disk.save()) |bytes| {
             kprintf("fs: snapshot saved, {d} bytes\n", .{bytes});
@@ -138,6 +144,31 @@ fn cmdWrite(path: []const u8, text: []const u8) void {
     if (!fsReady()) return;
     fs.global.write(path, text) catch |e| return kprintf("write: {s}: {s}\n", .{ path, @errorName(e) });
     kprintf("{d} bytes -> {s}\n", .{ text.len, path });
+}
+
+// Spawn a burst of worker threads. The scheduler spreads them across
+// cores round-robin; each reports which cpu it woke up on, so parallel
+// execution across cores is visible.
+fn cmdSpin() void {
+    for (0..4) |_| {
+        sched.spawn("worker", spinWorker) catch |e| {
+            kprintf("spin: {s}\n", .{@errorName(e)});
+            return;
+        };
+    }
+    kprint("spin: 4 workers spawned across the cores\n");
+}
+
+fn spinWorker() callconv(.c) void {
+    // A little busy work, then report home — repeated so a worker that
+    // gets migrated-free scheduling still shows a stable cpu.
+    for (0..3) |round| {
+        var acc: u64 = 0;
+        for (0..2_000_000) |k| acc +%= k;
+        std.mem.doNotOptimizeAway(acc);
+        kprintf("worker on cpu{d}: round {d} done\n", .{ arch.cpuId(), round });
+        sched.sleep(2);
+    }
 }
 
 fn cmdRun(it: *std.mem.TokenIterator(u8, .scalar)) void {

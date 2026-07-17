@@ -95,6 +95,7 @@ pub fn build(b: *std.Build) void {
         "qemu-system-aarch64",
         "-M",      "virt",
         "-cpu",    "cortex-a72",
+        "-smp",    "4",
         "-m",      "2G",
         "-kernel", "zig-out/bin/cedar.img",
         "-device", "ramfb",

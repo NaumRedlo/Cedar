@@ -83,6 +83,34 @@ pub const Dtb = struct {
         return .{ .dtb = self, .it = self.iterator(), .compat = compat };
     }
 
+    // Count nodes whose compatible list contains the string — used for
+    // CPUs, whose reg is a single cell under /cpus and so does not parse
+    // against the root address-cells.
+    pub fn countCompatible(self: *const Dtb, compat: []const u8) u32 {
+        var it = self.iterator();
+        var count: u32 = 0;
+        var matched = false;
+        while (true) {
+            const ev = it.next() catch return count;
+            switch (ev) {
+                .begin_node, .end_node => {
+                    if (matched) count += 1;
+                    matched = false;
+                },
+                .prop => |p| {
+                    if (std.mem.eql(u8, p.name, "compatible")) {
+                        var rest = p.value;
+                        while (std.mem.indexOfScalar(u8, rest, 0)) |nul| {
+                            if (std.mem.eql(u8, rest[0..nul], compat)) matched = true;
+                            rest = rest[nul + 1 ..];
+                        }
+                    }
+                },
+                .end => return count,
+            }
+        }
+    }
+
     // Memory reservation block: (address, size) pairs the kernel must
     // never hand out, terminated by a zero pair.
     pub fn reservations(self: *const Dtb) ReservationIterator {
@@ -384,6 +412,13 @@ test "arbitrary prop by compatible + gic irq parse" {
     try testing.expectEqual(@as(?u32, 33), parseGicIrq(iv)); // SPI 1 -> 32+1
     const fc = dt.findByCompatible("qemu,fw-cfg-mmio") orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(u64, 0x9020000), fc.addr);
+}
+
+test "count nodes by compatible" {
+    const dt = fixture();
+    try testing.expectEqual(@as(u32, 2), dt.countCompatible("virtio,mmio"));
+    try testing.expectEqual(@as(u32, 1), dt.countCompatible("arm,pl011"));
+    try testing.expectEqual(@as(u32, 0), dt.countCompatible("arm,cortex-a72"));
 }
 
 test "iterate all nodes by compatible" {

@@ -46,6 +46,15 @@ Cedar is a hobby operating system focused on clarity, reliability, and learning.
   10 Hz
   ```
 
+### SMP (multi-core)
+
+- All cores are brought online via PSCI (`CPU_ON` over HVC); each runs
+  its own idle thread, virtual timer and GIC CPU interface.
+- One shared thread table under a spinlock; threads are assigned to
+  cores round-robin and never migrate, so no cross-core stack hazard.
+- The `spin` shell command spreads workers across the cores and each
+  reports which one it ran on.
+
 ### Thread Isolation
 
 - Every kernel thread has its own stack.
@@ -242,9 +251,7 @@ Current goals include:
 
 Future plans may include:
 
-- typing directly into the QEMU window (virtio-input)
 - Raspberry Pi hardware support
-- SMP (multi-core scheduling)
 - networking
 - graphical desktop environment
 - ELF program loading

@@ -21,6 +21,7 @@ const userprogs = @import("userprogs");
 const virtio = @import("virtio.zig");
 const disk = @import("disk.zig");
 const kbd = @import("kbd.zig");
+const smp = @import("smp.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -197,6 +198,19 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
                     kprintf("input: virtio keyboard at 0x{x}, intid {d}\n", .{ slot.reg.addr, irq });
                     break;
                 }
+            }
+
+            // SMP: wake the other cores. PSCI method comes from the DTB.
+            const psci_method = blk: {
+                if (dt.findPropByCompatible("arm,psci-1.0", "method")) |m| break :blk dtb.str(m);
+                if (dt.findPropByCompatible("arm,psci-0.2", "method")) |m| break :blk dtb.str(m);
+                break :blk @as([]const u8, "hvc");
+            };
+            const ncpu: u8 = @intCast(@min(dt.countCompatible("arm,cortex-a72"), 255));
+            if (ncpu > 1) {
+                sched.setActiveCpus(@min(ncpu, sched.MAX_CPUS));
+                kprintf("smp: {d} cpus in dtb, psci via {s}\n", .{ ncpu, psci_method });
+                smp.startCores(psci_method, ncpu);
             }
 
             sched.spawn("shell", shell.run) catch |e| kprintf("spawn failed: {s}\n", .{@errorName(e)});

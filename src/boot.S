@@ -33,7 +33,9 @@ _start:
     .long   0                     // res5
 
 entry:
-    // Park every core except core 0 — SMP comes much later.
+    // Only core 0 runs the primary path. Secondaries are started later,
+    // on demand, via PSCI CPU_ON pointing at secondary_start — so any
+    // core that lands here at power-on (before we ask) just waits.
     mrs     x1, mpidr_el1
     and     x1, x1, #0xff
     cbz     x1, core0
@@ -128,3 +130,59 @@ high_entry:
 hang:
     wfe
     b       hang
+
+// Secondary-core entry, reached via PSCI CPU_ON with the MMU off and
+// the cpu index in x0 (PSCI context_id). The L1 table core0 built is
+// still live at its fixed physical address, so this core only loads the
+// translation registers and enables the MMU — it doesn't rebuild them.
+.section .text.boot
+.global secondary_start
+secondary_start:
+    mov     x20, x0               // cpu index
+
+    ldr     x0, =L1_TABLE
+    ldr     x1, =MAIR_VAL
+    msr     mair_el1, x1
+    ldr     x1, =TCR_VAL
+    msr     tcr_el1, x1
+    msr     ttbr0_el1, x0
+    msr     ttbr1_el1, x0
+    dsb     sy
+    isb
+    tlbi    vmalle1
+    ic      iallu
+    dsb     nsh
+    isb
+    mrs     x1, sctlr_el1
+    orr     x1, x1, #1
+    orr     x1, x1, #(1 << 2)
+    orr     x1, x1, #(1 << 12)
+    msr     sctlr_el1, x1
+    isb
+
+    ldr     x1, =secondary_high
+    br      x1
+.ltorg
+
+.section .text
+secondary_high:
+    // Higher half now: disable TTBR0 walks like the primary did.
+    mrs     x1, tcr_el1
+    orr     x1, x1, #(1 << 7)     // EPD0
+    msr     tcr_el1, x1
+    tlbi    vmalle1
+    dsb     nsh
+    isb
+
+    // Per-core stack: secondary_stacks[cpu], set up by smp.startCores.
+    adrp    x1, secondary_stacks
+    add     x1, x1, :lo12:secondary_stacks
+    ldr     x2, [x1, x20, lsl #3]
+    mov     sp, x2
+
+    mov     x0, x20
+    bl      secondaryMain
+
+secondary_hang:
+    wfe
+    b       secondary_hang

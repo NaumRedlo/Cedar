@@ -64,6 +64,13 @@ pub fn irqRestore(daif: u64) void {
     );
 }
 
+pub fn cpuId() u64 {
+    const mpidr = asm volatile ("mrs %[out], mpidr_el1"
+        : [out] "=r" (-> u64),
+    );
+    return mpidr & 0xff;
+}
+
 pub fn currentEl() u64 {
     const el = asm volatile ("mrs %[out], currentel"
         : [out] "=r" (-> u64),
