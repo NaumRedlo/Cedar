@@ -30,7 +30,14 @@ var rows: u64 = 0;
 var cur_col: u64 = 0;
 var cur_row: u64 = 0;
 
+// The real screen framebuffer, remembered from the first init so the
+// window manager can restore full-screen output when GUI mode exits.
+pub var screen_desc: ?Framebuffer = null;
+
+// Point the console at a framebuffer (the screen, or a GUI window's
+// content buffer). The first target is taken to be the real screen.
 pub fn init(desc: Framebuffer) void {
+    if (screen_desc == null) screen_desc = desc;
     fb = desc;
     words_per_row = desc.pitch / 4;
     cols = desc.width / CELL_W;
@@ -58,6 +65,7 @@ pub fn clear() void {
 }
 
 fn drawGlyph(c: u8, col: u64, row: u64) void {
+    const f = fb orelse return;
     const glyph = &font.basic[if (c < 0x80) c else '?'];
     const px = pixels();
     const x0 = col * CELL_W;
@@ -67,9 +75,13 @@ fn drawGlyph(c: u8, col: u64, row: u64) void {
         for (0..GLYPH_W) |gx| {
             const color: u32 = if ((bits >> @intCast(gx)) & 1 != 0) FG else BG;
             for (0..SCALE) |sy| {
-                const line = px + (y0 + gy * SCALE + sy) * words_per_row;
+                const py = y0 + gy * SCALE + sy;
+                if (py >= f.height) continue; // defence in depth: never write past the buffer
+                const line = px + py * words_per_row;
                 for (0..SCALE) |sx| {
-                    line[x0 + gx * SCALE + sx] = color;
+                    const x = x0 + gx * SCALE + sx;
+                    if (x >= f.width) continue;
+                    line[x] = color;
                 }
             }
         }

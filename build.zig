@@ -101,6 +101,7 @@ pub fn build(b: *std.Build) void {
         "-drive",  "file=disk.img,if=none,format=raw,id=hd0",
         "-device", "virtio-blk-device,drive=hd0",
         "-device", "virtio-keyboard-device",
+        "-device", "virtio-tablet-device",
         "-serial", "stdio",
     });
     run_cmd.step.dependOn(b.getInstallStep());

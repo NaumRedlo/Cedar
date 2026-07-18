@@ -12,6 +12,19 @@ pub var console_enabled = false;
 
 var lock = sync.SpinLock{};
 
+// Console state (the framebuffer target, cursor, scroll) is guarded by
+// this same lock: kprint holds it around putChar, so anyone repointing
+// the console (the window manager on GUI enter/exit) must hold it too,
+// or a print on another core can tear the transition. Held only across
+// the state change itself — never call back into kprint while holding.
+pub fn acquireConsole() u64 {
+    return lock.lock();
+}
+
+pub fn releaseConsole(daif: u64) void {
+    lock.unlock(daif);
+}
+
 fn emit(s: []const u8) void {
     for (s) |c| {
         if (c == '\n') arch.serialWriteByte('\r');

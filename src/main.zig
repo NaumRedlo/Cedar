@@ -22,6 +22,7 @@ const virtio = @import("virtio.zig");
 const disk = @import("disk.zig");
 const kbd = @import("kbd.zig");
 const smp = @import("smp.zig");
+const mouse = @import("mouse.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -161,7 +162,7 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
         if (dt.findRegsByCompatible("arm,cortex-a15-gic", &regs) >= 2) {
             gic.init(mmu.p2v(regs[0].addr), mmu.p2v(regs[1].addr));
             kprintf("gic: v2, distributor 0x{x}, cpu interface 0x{x} (phys, via hhdm)\n", .{ regs[0].addr, regs[1].addr });
-            timer.init(10);
+            timer.init(25); // 25 Hz: smooth enough for the GUI cursor
             sched.init();
             arch.enableIrqs();
             kprint("irq: unmasked, ticking\n");
@@ -172,6 +173,7 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
                     if (ramfb.init(1024, 768)) |fb| {
                         console.init(fb);
                         log.console_enabled = true;
+                        mouse.setScreen(@intCast(fb.width), @intCast(fb.height));
                         kprintf("display: ramfb {d}x{d}, console mirrored to screen\n", .{ fb.width, fb.height });
                     } else {
                         kprint("display: no ramfb (add -device ramfb), serial only\n");
@@ -189,14 +191,17 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
                 }
             }
 
-            // And the virtio keyboard, so typing into the QEMU window works.
+            // virtio-input devices (keyboard + tablet), claimed by name.
             var kit = dt.compatibleRegs("virtio,mmio");
             while (kit.next()) |slot| {
                 const irq = slot.intid orelse continue;
-                if (kbd.probe(mmu.p2v(slot.reg.addr), irq)) {
+                const base = mmu.p2v(slot.reg.addr);
+                if (kbd.tryClaim(base, irq)) {
                     gic.enableIrq(irq);
-                    kprintf("input: virtio keyboard at 0x{x}, intid {d}\n", .{ slot.reg.addr, irq });
-                    break;
+                    kprintf("input: virtio keyboard, intid {d}\n", .{irq});
+                } else if (mouse.tryClaim(base, irq)) {
+                    gic.enableIrq(irq);
+                    kprintf("input: virtio tablet/mouse, intid {d}\n", .{irq});
                 }
             }
 

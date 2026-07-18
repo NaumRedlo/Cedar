@@ -40,6 +40,10 @@ pub fn now() u64 {
     return @as(*volatile u64, &ticks).*;
 }
 
+pub fn tickHz() u64 {
+    return hz;
+}
+
 // Every core re-arms its own timer; only cpu 0 advances the shared tick
 // counter, keeping `now()` a single-writer monotonic clock.
 pub fn onIrq(is_bsp: bool) void {

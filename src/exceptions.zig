@@ -5,6 +5,7 @@ const timer = @import("timer.zig");
 const sched = @import("sched.zig");
 const input = @import("input.zig");
 const kbd = @import("kbd.zig");
+const mouse = @import("mouse.zig");
 
 extern var exception_vectors: u8;
 
@@ -107,6 +108,8 @@ fn dispatchIrq(frame: *Frame) *Frame {
             input.onIrq();
         } else if (intid == kbd.intid) {
             kbd.onIrq();
+        } else if (intid == mouse.intid) {
+            mouse.onIrq();
         } else {
             log.kprintf("irq: unexpected intid {d}\n", .{intid});
         }

@@ -13,6 +13,7 @@ const user = @import("user.zig");
 const heap = @import("heap.zig");
 const arch = @import("arch.zig").impl;
 const smp = @import("smp.zig");
+const wm = @import("wm.zig");
 const disk = @import("disk.zig");
 
 const kprint = log.kprint;
@@ -60,7 +61,7 @@ fn execute(line: []const u8) void {
     const cmd = it.next() orelse return;
 
     if (std.mem.eql(u8, cmd, "help")) {
-        kprint("system: help, about, uptime, mem, clear, ps, save, smp, spin\n");
+        kprint("system: help, about, uptime, mem, clear, ps, save, smp, spin, gui\n");
         kprint("files:  ls [path], cat <path>, write <path> <text>, mkdir <path>, rm <path>\n");
         kprint("proc:   run <path> [args...]\n");
     } else if (std.mem.eql(u8, cmd, "about")) {
@@ -89,6 +90,8 @@ fn execute(line: []const u8) void {
         kprintf("{d} cpu(s) online; this shell is on cpu{d}\n", .{ smp.onlineCount(), arch.cpuId() });
     } else if (std.mem.eql(u8, cmd, "spin")) {
         cmdSpin();
+    } else if (std.mem.eql(u8, cmd, "gui")) {
+        wm.start();
     } else if (std.mem.eql(u8, cmd, "save")) {
         if (disk.save()) |bytes| {
             kprintf("fs: snapshot saved, {d} bytes\n", .{bytes});
