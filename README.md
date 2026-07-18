@@ -43,8 +43,9 @@ Cedar is a hobby operating system focused on clarity, reliability, and learning.
   - ARM Generic Virtual Timer
 - Tick frequency:
   ```
-  10 Hz
+  25 Hz
   ```
+  (smooth enough to drive the GUI cursor)
 
 ### SMP (multi-core)
 
@@ -115,11 +116,33 @@ Snapshots are written to the virtual disk image and automatically restored durin
 ## 🖥️ Console, Keyboard & Shell
 
 - **Framebuffer console**: a ramfb display (1024×768) configured through QEMU's fw_cfg channel; every line of kernel output is mirrored to the screen with a built-in bitmap font.
-- **Keyboard**: PL011 UART receive interrupts feed a ring buffer; a keypress wakes the shell instantly.
+- **Input**: two paths feed the same ring buffer, so typing in the QEMU window and typing over serial are indistinguishable to the shell:
+  - PL011 UART receive interrupts (serial).
+  - virtio-input keyboard, claimed by name and translated through a US keymap.
 - **Interactive shell** at the `cedar>` prompt:
-  - system: `help`, `about`, `uptime`, `mem`, `clear`, `ps`, `save`
+  - system: `help`, `about`, `uptime`, `mem`, `clear`, `ps`, `smp`, `spin`, `save`, `gui`
   - files: `ls`, `cat`, `write`, `mkdir`, `rm`
   - processes: `run <path> [args...]`
+
+---
+
+## 🪟 Graphical Mode
+
+Typing `gui` hands the screen to a window-manager kernel thread that
+composes a full scene into a back buffer at 25 Hz:
+
+- a desktop gradient, draggable windows with title bars and a close box,
+  a top bar with a live clock and CPU count, and a mouse cursor;
+- the kernel console is redirected into a **Console** window, so
+  `kprint` and the shell keep working inside the GUI;
+- a **System Monitor** window shows live uptime, free/total memory and
+  online CPU count;
+- input comes from a **virtio-tablet** pointer (absolute coordinates
+  plus the left button), polled every frame.
+
+Clicking the close box restores the full-screen console. All drawing is
+done in software over 32-bpp linear surfaces shared by the screen, the
+back buffer, and each window.
 
 ---
 
@@ -184,6 +207,8 @@ Kernel execution continues normally.
 | Interrupt Controller | GICv2 |
 | UART | PL011 |
 | Display | ramfb via fw_cfg |
+| Input | virtio-input (keyboard + tablet), PL011 serial |
+| Graphics | software-rendered window manager |
 | Storage | VirtIO Block |
 
 ---
@@ -230,7 +255,7 @@ Build and launch immediately:
 zig build run
 ```
 
-A QEMU window opens with the Cedar screen; type commands in the terminal you launched from (input goes over serial). A 16 MiB `disk.img` for snapshots is created automatically on first run.
+A QEMU window opens with the Cedar screen. Type directly in that window (virtio keyboard) or in the terminal you launched from (serial) — both reach the shell. Try `gui` for the graphical mode. A 16 MiB `disk.img` for snapshots is created automatically on first run.
 
 Run the host-side unit tests (FS, DTB parser, frame allocator):
 
@@ -255,11 +280,4 @@ Current goals include:
 Future plans may include:
 
 - networking
-- graphical desktop environment
-- ELF program loading
-
----
-
-## License
-
-Cedar is licensed under the [GNU General Public License v3.0](LICENSE) (GPLv3). Any distributed derivative work — forks, ports, redistributions — must stay open source under GPLv3 as well.
+- a richer window manager and desktop environment
