@@ -215,6 +215,8 @@ Kernel execution continues normally.
 
 # 📸 Demo
 
+![Cedar graphical mode: desktop, draggable windows, live system monitor](docs/gui.png)
+
 ![Cedar Shell on the framebuffer console](docs/screenshot.png)
 
 Example session:
