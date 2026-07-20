@@ -102,6 +102,8 @@ pub fn build(b: *std.Build) void {
         "-device", "virtio-blk-device,drive=hd0",
         "-device", "virtio-keyboard-device",
         "-device", "virtio-tablet-device",
+        "-netdev", "user,id=net0",
+        "-device", "virtio-net-device,netdev=net0",
         "-serial", "stdio",
     });
     run_cmd.step.dependOn(b.getInstallStep());
@@ -112,7 +114,7 @@ pub fn build(b: *std.Build) void {
     // Pure-logic modules (DTB parser, frame allocator) are unit-tested
     // on the host.
     const test_step = b.step("test", "Run host unit tests");
-    for ([_][]const u8{ "src/dtb.zig", "src/pmm.zig", "src/fs.zig", "src/elf.zig" }) |file| {
+    for ([_][]const u8{ "src/dtb.zig", "src/pmm.zig", "src/fs.zig", "src/elf.zig", "src/net.zig" }) |file| {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path(file),

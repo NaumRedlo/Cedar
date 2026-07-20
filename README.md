@@ -146,6 +146,37 @@ back buffer, and each window.
 
 ---
 
+## 🌐 Networking
+
+A small IPv4 stack over a **virtio-net** driver (two virtqueues, MAC
+read from config space):
+
+- **Ethernet + ARP**: resolves a neighbour's MAC and answers incoming
+  ARP requests for our address;
+- **IPv4 + ICMP**: sends echo requests and replies to incoming echoes;
+- the internet checksum and all packet building/parsing are pure logic,
+  unit-tested on the host.
+
+Against QEMU's user-mode (SLIRP) network — our IP `10.0.2.15`, gateway
+`10.0.2.2` — `ping` resolves the gateway and reports a round-trip:
+
+```text
+cedar> ping
+ping 10.0.2.2: reply in 0.768 ms
+cedar> net
+mac      52:54:00:12:34:56
+ip       10.0.2.15/24
+gateway  10.0.2.2
+gw mac   52:55:0a:00:02:02 (resolved)
+```
+
+QEMU's legacy `virtio-net-device` delivers received frames to the used
+ring reliably but does not raise the RX interrupt here, so the driver
+polls the ring (a low-frequency kernel thread keeps it drained so
+incoming requests are answered even while idle).
+
+---
+
 ## 👤 Userspace Runtime (EL0)
 
 ### Process Isolation
@@ -210,6 +241,7 @@ Kernel execution continues normally.
 | Input | virtio-input (keyboard + tablet), PL011 serial |
 | Graphics | software-rendered window manager |
 | Storage | VirtIO Block |
+| Networking | VirtIO Net + IPv4/ARP/ICMP stack |
 
 ---
 

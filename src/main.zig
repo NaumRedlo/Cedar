@@ -23,6 +23,8 @@ const disk = @import("disk.zig");
 const kbd = @import("kbd.zig");
 const smp = @import("smp.zig");
 const mouse = @import("mouse.zig");
+const virtio_net = @import("virtio_net.zig");
+const net = @import("net.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -202,6 +204,12 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
                 } else if (mouse.tryClaim(base, irq)) {
                     gic.enableIrq(irq);
                     kprintf("input: virtio tablet/mouse, intid {d}\n", .{irq});
+                } else if (virtio_net.probe(base)) {
+                    virtio_net.intid = irq;
+                    gic.enableIrq(irq);
+                    sched.spawn("net", net.pollLoop) catch {};
+                    const m = net.mac();
+                    kprintf("net: virtio-net {x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}, ip 10.0.2.15, intid {d}\n", .{ m[0], m[1], m[2], m[3], m[4], m[5], irq });
                 }
             }
 

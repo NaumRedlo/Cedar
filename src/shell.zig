@@ -14,6 +14,7 @@ const heap = @import("heap.zig");
 const arch = @import("arch.zig").impl;
 const smp = @import("smp.zig");
 const wm = @import("wm.zig");
+const net = @import("net.zig");
 const disk = @import("disk.zig");
 
 const kprint = log.kprint;
@@ -64,6 +65,7 @@ fn execute(line: []const u8) void {
         kprint("system: help, about, uptime, mem, clear, ps, save, smp, spin, gui\n");
         kprint("files:  ls [path], cat <path>, write <path> <text>, mkdir <path>, rm <path>\n");
         kprint("proc:   run <path> [args...]\n");
+        kprint("net:    net, ping\n");
     } else if (std.mem.eql(u8, cmd, "about")) {
         kprint("Cedar — an ARM-only hobby kernel in Zig. No bootloader, no mercy.\n");
     } else if (std.mem.eql(u8, cmd, "uptime")) {
@@ -92,6 +94,10 @@ fn execute(line: []const u8) void {
         cmdSpin();
     } else if (std.mem.eql(u8, cmd, "gui")) {
         wm.start();
+    } else if (std.mem.eql(u8, cmd, "net")) {
+        cmdNet();
+    } else if (std.mem.eql(u8, cmd, "ping")) {
+        cmdPing();
     } else if (std.mem.eql(u8, cmd, "save")) {
         if (disk.save()) |bytes| {
             kprintf("fs: snapshot saved, {d} bytes\n", .{bytes});
@@ -102,6 +108,27 @@ fn execute(line: []const u8) void {
         cmdRun(&it);
     } else {
         kprintf("unknown command: '{s}' (try 'help')\n", .{cmd});
+    }
+}
+
+fn cmdNet() void {
+    if (!net.up) return kprint("net: no interface\n");
+    const m = net.mac();
+    kprintf("mac      {x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}\n", .{ m[0], m[1], m[2], m[3], m[4], m[5] });
+    kprint("ip       10.0.2.15/24\n");
+    kprint("gateway  10.0.2.2\n");
+    if (net.gatewayMac()) |g| {
+        kprintf("gw mac   {x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2} (resolved)\n", .{ g[0], g[1], g[2], g[3], g[4], g[5] });
+    } else {
+        kprint("gw mac   (unresolved — run ping)\n");
+    }
+}
+
+fn cmdPing() void {
+    if (net.ping()) |us| {
+        kprintf("ping 10.0.2.2: reply in {d}.{d:0>3} ms\n", .{ us / 1000, us % 1000 });
+    } else |e| {
+        kprintf("ping: {s}\n", .{@errorName(e)});
     }
 }
 
