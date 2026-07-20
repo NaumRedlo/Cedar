@@ -126,23 +126,29 @@ Snapshots are written to the virtual disk image and automatically restored durin
 
 ---
 
-## 🪟 Graphical Mode
+## 🪟 Graphical Mode (primary)
 
-Typing `gui` hands the screen to a window-manager kernel thread that
-composes a full scene into a back buffer at 25 Hz:
+Cedar **boots straight into the desktop** — the graphical mode is the
+primary interface, the console is a diagnostic fallback. A window-manager
+kernel thread composes the whole scene into a back buffer at 25 Hz:
 
-- a desktop gradient, draggable windows with title bars and a close box,
-  a top bar with a live clock and CPU count, and a mouse cursor;
+- a desktop gradient, draggable titled windows, a top bar with a live
+  clock and CPU count, and a mouse cursor;
+- a **dock** along the bottom with a button per window — click it to
+  raise and focus that window; the active window's title bar and dock
+  button are highlighted;
 - the kernel console is redirected into a **Console** window, so
-  `kprint` and the shell keep working inside the GUI;
+  `kprint` and the shell keep working inside the GUI — the shell prompt
+  is right there when the desktop appears;
 - a **System Monitor** window shows live uptime, free/total memory and
   online CPU count;
 - input comes from a **virtio-tablet** pointer (absolute coordinates
   plus the left button), polled every frame.
 
-Clicking the close box restores the full-screen console. All drawing is
-done in software over 32-bpp linear surfaces shared by the screen, the
-back buffer, and each window.
+Clicking the close box (top-right) drops to the full-screen diagnostic
+console; typing `gui` brings the desktop back. All drawing is done in
+software over 32-bpp linear surfaces shared by the screen, the back
+buffer, and each window.
 
 ---
 

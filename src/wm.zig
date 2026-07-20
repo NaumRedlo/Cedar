@@ -17,8 +17,10 @@ const log = @import("log.zig");
 const smp = @import("smp.zig");
 
 const BAR_H: u32 = 28;
+const DOCK_H: u32 = 30;
 const TITLE_H: u32 = 22;
 const BORDER: u32 = 2;
+const DOCK_BTN_W: u32 = 150;
 
 // windows[0] hosts the redirected kernel console; its content buffer is
 // written by the shell thread, so its blit is taken under the console
@@ -29,8 +31,13 @@ const COL_BAR: u32 = 0x1e3a2a;
 const COL_BAR_TEXT: u32 = 0xd7e4d0;
 const COL_CLOSE: u32 = 0x8c3a3a;
 const COL_CHROME: u32 = 0x2c4c3a;
-const COL_CHROME_HI: u32 = 0x3a5c48;
+const COL_TITLE_FOCUS: u32 = 0x3a6c50; // active window title bar
+const COL_TITLE_BLUR: u32 = 0x24382c; // inactive window title bar
 const COL_TITLE_TEXT: u32 = 0xe8f0e8;
+const COL_TITLE_TEXT_BLUR: u32 = 0x8fae9a;
+const COL_DOCK: u32 = 0x16281d;
+const COL_DOCK_BTN: u32 = 0x24402f;
+const COL_DOCK_BTN_HI: u32 = 0x3a6c50;
 const COL_DESK_TOP: u32 = 0x14261c;
 const COL_DESK_BOT: u32 = 0x0a140e;
 
@@ -101,27 +108,16 @@ pub fn start() void {
         log.kprint("gui: already running\n");
         return;
     }
-    // Claim the flag here, before the thread is scheduled: setting it
-    // inside run() leaves a window where a second 'gui' passes the guard
-    // and double-spawns the window manager.
-    setRunning(true);
-    sched.spawn("wm", run) catch |e| {
-        setRunning(false);
-        log.kprintf("gui: spawn failed: {s}\n", .{@errorName(e)});
-        return;
-    };
-}
-
-fn run() callconv(.c) void {
     if (!setupOnce()) {
         log.kprint("gui: no framebuffer\n");
-        setRunning(false);
         return;
     }
 
-    // Console moves into its window: every kprint now lands there. Hold
-    // the console lock across the repoint so a concurrent kprint on
-    // another core can't tear the framebuffer/cursor state mid-switch.
+    // Redirect the console into its window synchronously, before the
+    // compose thread (and, at boot, the shell) run — so the shell's
+    // first prompt lands in the window with no cross-thread race. Held
+    // under the console lock so a concurrent kprint can't tear the
+    // framebuffer/cursor state mid-switch.
     {
         const daif = log.acquireConsole();
         defer log.releaseConsole(daif);
@@ -134,20 +130,30 @@ fn run() callconv(.c) void {
         });
     }
     drawAbout();
+    log.kprint("Cedar desktop. The console lives in this window.\n");
 
+    setRunning(true);
+    sched.spawn("wm", run) catch |e| {
+        setRunning(false);
+        log.kprintf("gui: spawn failed: {s}\n", .{@errorName(e)});
+    };
+}
+
+fn run() callconv(.c) void {
     while (isRunning()) {
         handleMouse();
         compose();
         sched.sleep(1); // one tick = one frame
     }
 
-    // Console returns to the full screen, under the same lock.
+    // Console returns to the full screen (diagnostic mode), under the
+    // console lock. Typing 'gui' brings the desktop back.
     {
         const daif = log.acquireConsole();
         defer log.releaseConsole(daif);
         console.init(console.screen_desc.?);
     }
-    log.kprint("gui: closed, console restored\n");
+    log.kprint("Dropped to the diagnostic console. Type 'gui' for the desktop.\n");
 }
 
 fn handleMouse() void {
@@ -168,9 +174,21 @@ fn handleMouse() void {
     const mx: i32 = @intCast(st.x);
     const my: i32 = @intCast(st.y);
 
-    // Close box in the top bar?
+    // Close box in the top bar drops to the diagnostic console.
     if (my < BAR_H and mx >= screen.w - BAR_H) {
         setRunning(false);
+        return;
+    }
+
+    // Dock buttons at the bottom raise + focus their window.
+    if (my >= back.h - DOCK_H) {
+        for (0..windows.len) |wi| {
+            const bx: i32 = @intCast(8 + wi * (DOCK_BTN_W + 6));
+            if (mx >= bx and mx < bx + @as(i32, @intCast(DOCK_BTN_W))) {
+                raise(wi);
+                return;
+            }
+        }
         return;
     }
 
@@ -219,6 +237,8 @@ fn compose() void {
 
     for (zorder) |wi| drawWindow(wi);
 
+    drawDock();
+
     // Top bar.
     back.rect(0, 0, back.w, BAR_H, COL_BAR);
     back.text(10, 10, "Cedar", COL_BAR_TEXT, null);
@@ -234,13 +254,18 @@ fn compose() void {
     screen.blit(0, 0, &back);
 }
 
+fn focused() usize {
+    return zorder[zorder.len - 1];
+}
+
 fn drawWindow(wi: usize) void {
     const w = &windows[wi];
     const ow = w.outerW();
     const oh = w.outerH();
+    const active = wi == focused();
     back.rect(w.x, w.y, ow, oh, COL_CHROME);
-    back.rect(w.x + 1, w.y + 1, ow - 2, TITLE_H, COL_CHROME_HI);
-    back.text(w.x + 8, w.y + 7, w.title, COL_TITLE_TEXT, null);
+    back.rect(w.x + 1, w.y + 1, ow - 2, TITLE_H, if (active) COL_TITLE_FOCUS else COL_TITLE_BLUR);
+    back.text(w.x + 8, w.y + 7, w.title, if (active) COL_TITLE_TEXT else COL_TITLE_TEXT_BLUR, null);
     const cy = w.y + @as(i32, @intCast(TITLE_H + BORDER)) - 1;
     if (wi == CONSOLE_WIN) {
         // The shell writes this buffer via putChar/scroll under the
@@ -252,7 +277,20 @@ fn drawWindow(wi: usize) void {
     } else {
         back.blit(w.x + BORDER, cy, &w.surf);
     }
-    back.frame(w.x, w.y, ow, oh, 0x53785f);
+    back.frame(w.x, w.y, ow, oh, if (active) 0x6fa080 else 0x3f5c4c);
+}
+
+fn drawDock() void {
+    const dy: i32 = @intCast(back.h - DOCK_H);
+    back.rect(0, dy, back.w, DOCK_H, COL_DOCK);
+    back.rect(0, dy, back.w, 1, 0x3a5c48); // top edge highlight
+    const foc = focused();
+    for (windows, 0..) |w, wi| {
+        const bx: i32 = @intCast(8 + wi * (DOCK_BTN_W + 6));
+        const active = wi == foc;
+        back.rect(bx, dy + 4, DOCK_BTN_W, DOCK_H - 8, if (active) COL_DOCK_BTN_HI else COL_DOCK_BTN);
+        back.text(bx + 8, dy + 11, w.title, if (active) COL_TITLE_TEXT else COL_TITLE_TEXT_BLUR, null);
+    }
 }
 
 fn drawSysmon() void {
@@ -282,8 +320,8 @@ fn drawAbout() void {
     s.fill(0x101c14);
     s.text(10, 12, "Cedar OS 0.1 (aarch64)", 0xd7e4d0, null);
     s.text(10, 30, "no bootloader, no mercy", 0x8fae9a, null);
-    s.text(10, 56, "drag windows by their title", 0x8fae9a, null);
-    s.text(10, 72, "click x in the bar to exit", 0x8fae9a, null);
+    s.text(10, 56, "drag titles - dock raises windows", 0x8fae9a, null);
+    s.text(10, 72, "x (top right) -> diagnostic console", 0x8fae9a, null);
 }
 
 // A simple 8x12 arrow, white with dark outline.

@@ -25,6 +25,7 @@ const smp = @import("smp.zig");
 const mouse = @import("mouse.zig");
 const virtio_net = @import("virtio_net.zig");
 const net = @import("net.zig");
+const wm = @import("wm.zig");
 
 const kprint = log.kprint;
 const kprintf = log.kprintf;
@@ -225,6 +226,13 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
                 kprintf("smp: {d} cpus in dtb, psci via {s}\n", .{ ncpu, psci_method });
                 smp.startCores(psci_method, ncpu);
             }
+
+            // Boot straight into the desktop (GUI is the primary mode);
+            // the console lives in a window. Start it before the shell so
+            // the shell's first prompt lands in the Console window. If the
+            // display isn't up, start() is a no-op and the shell keeps the
+            // full-screen console.
+            if (console.screen_desc != null) wm.start();
 
             sched.spawn("shell", shell.run) catch |e| kprintf("spawn failed: {s}\n", .{@errorName(e)});
         } else {
