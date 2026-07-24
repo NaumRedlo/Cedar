@@ -126,29 +126,25 @@ Snapshots are written to the virtual disk image and automatically restored durin
 
 ---
 
-## 🪟 Graphical Mode (primary)
+## 🪟 Graphical Desktop (the only surface)
 
-Cedar **boots straight into the desktop** — the graphical mode is the
-primary interface, the console is a diagnostic fallback. A window-manager
-kernel thread composes the whole scene into a back buffer at 25 Hz:
+Cedar **boots straight into the desktop**, and the desktop is the only
+way into the OS — there is no full-screen console mode. The terminal is
+just a window: close it and the shell keeps running underneath; reopen
+it from the dock and the accumulated output is right there. A
+window-manager kernel thread composes the whole scene into a back
+buffer at 25 Hz:
 
-- a desktop gradient, draggable titled windows, a top bar with a live
-  clock and CPU count, and a mouse cursor;
-- a **dock** along the bottom with a button per window — click it to
-  raise and focus that window; the active window's title bar and dock
-  button are highlighted;
-- the kernel console is redirected into a **Console** window, so
-  `kprint` and the shell keep working inside the GUI — the shell prompt
-  is right there when the desktop appears;
-- a **System Monitor** window shows live uptime, free/total memory and
-  online CPU count;
-- input comes from a **virtio-tablet** pointer (absolute coordinates
-  plus the left button), polled every frame.
-
-Clicking the close box (top-right) drops to the full-screen diagnostic
-console; typing `gui` brings the desktop back. All drawing is done in
-software over 32-bpp linear surfaces shared by the screen, the back
-buffer, and each window.
+- a desktop gradient, draggable titled windows with drop shadows, and a
+  mouse cursor; the layout adapts to the screen resolution (1280×800 by
+  default);
+- every window has its own close button that hides it; the **dock**
+  along the bottom has a button per window (with a running-indicator
+  pip, dimmed when the window is hidden) that reopens and focuses it;
+- the active window's title bar and dock button are highlighted;
+- the kernel console lives in the **Console** window and a live
+  **System Monitor** shows uptime, memory and CPU count;
+- input comes from a **virtio-tablet** pointer, polled every frame.
 
 ---
 

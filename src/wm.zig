@@ -1,9 +1,11 @@
-// The Cedar window manager: a kernel thread that owns the screen while
-// GUI mode is active. Full-scene composition into a back buffer every
-// frame (25 Hz): desktop gradient, draggable windows, a top bar with a
-// live clock and a close box, and the mouse cursor. The kernel console
-// is redirected into the "Console" window for the duration — kprint
-// and the shell keep working, inside the GUI.
+// The Cedar window manager: a kernel thread that owns the screen. The
+// desktop is the only surface — there is no way out to a full-screen
+// console; the terminal is just a window you can close and reopen. Full
+// scene composition into a back buffer every frame (25 Hz): desktop
+// gradient, draggable/closable windows with shadows, a top bar with a
+// live clock, a dock, and the mouse cursor. The kernel console is
+// redirected into the "Console" window, so kprint and the shell keep
+// working inside the GUI. Layout adapts to the screen resolution.
 
 const std = @import("std");
 const gfx = @import("gfx.zig");
@@ -16,36 +18,51 @@ const timer = @import("timer.zig");
 const log = @import("log.zig");
 const smp = @import("smp.zig");
 
-const BAR_H: u32 = 28;
-const DOCK_H: u32 = 30;
-const TITLE_H: u32 = 22;
+const BAR_H: u32 = 30;
+const DOCK_H: u32 = 40;
+const TITLE_H: u32 = 24;
 const BORDER: u32 = 2;
-const DOCK_BTN_W: u32 = 150;
+const SHADOW: i32 = 8;
+const MARGIN: u32 = 18;
+const DOCK_BTN_W: u32 = 168;
+const DOCK_BTN_GAP: u32 = 8;
 
 // windows[0] hosts the redirected kernel console; its content buffer is
 // written by the shell thread, so its blit is taken under the console
 // lock (see drawWindow).
 const CONSOLE_WIN: usize = 0;
+const NWIN = 3;
 
-const COL_BAR: u32 = 0x1e3a2a;
+// Palette — a calm cedar-green desktop.
+const COL_BAR: u32 = 0x16281d;
 const COL_BAR_TEXT: u32 = 0xd7e4d0;
-const COL_CLOSE: u32 = 0x8c3a3a;
-const COL_CHROME: u32 = 0x2c4c3a;
-const COL_TITLE_FOCUS: u32 = 0x3a6c50; // active window title bar
-const COL_TITLE_BLUR: u32 = 0x24382c; // inactive window title bar
-const COL_TITLE_TEXT: u32 = 0xe8f0e8;
-const COL_TITLE_TEXT_BLUR: u32 = 0x8fae9a;
-const COL_DOCK: u32 = 0x16281d;
-const COL_DOCK_BTN: u32 = 0x24402f;
-const COL_DOCK_BTN_HI: u32 = 0x3a6c50;
-const COL_DESK_TOP: u32 = 0x14261c;
-const COL_DESK_BOT: u32 = 0x0a140e;
+const COL_BAR_ACCENT: u32 = 0x5fae7f;
+const COL_CHROME: u32 = 0x22382b;
+const COL_TITLE_FOCUS: u32 = 0x356048;
+const COL_TITLE_BLUR: u32 = 0x21362a;
+const COL_TITLE_TEXT: u32 = 0xeef4ee;
+const COL_TITLE_TEXT_BLUR: u32 = 0x86a493;
+const COL_WCLOSE: u32 = 0xb05a4e;
+const COL_FRAME_FOCUS: u32 = 0x6fa080;
+const COL_FRAME_BLUR: u32 = 0x33503f;
+const COL_SHADOW: u32 = 0x05100a;
+const COL_DOCK: u32 = 0x101d15;
+const COL_DOCK_EDGE: u32 = 0x3a5c48;
+const COL_DOCK_BTN: u32 = 0x21402e;
+const COL_DOCK_BTN_HI: u32 = 0x356048;
+const COL_DOCK_BTN_OFF: u32 = 0x18271d;
+const COL_PANEL_BG: u32 = 0x0f1a13;
+const COL_TEXT: u32 = 0xd7e4d0;
+const COL_TEXT_DIM: u32 = 0x86a493;
+const COL_DESK_TOP: u32 = 0x16301f;
+const COL_DESK_BOT: u32 = 0x080f0a;
 
 const Window = struct {
     x: i32,
     y: i32,
     surf: gfx.Surface, // content buffer
     title: []const u8,
+    visible: bool = true,
 
     fn outerW(self: *const Window) u32 {
         return self.surf.w + 2 * BORDER;
@@ -55,10 +72,6 @@ const Window = struct {
     }
 };
 
-// Written by the shell thread (start) and the WM thread (run / close
-// box), read across cores; accessed atomically so the transition is
-// always visible. Only the single shell thread calls start(), so the
-// guard is not a cross-core check-then-act.
 var running = false;
 
 fn isRunning() bool {
@@ -71,8 +84,8 @@ fn setRunning(v: bool) void {
 
 var screen: gfx.Surface = undefined;
 var back: gfx.Surface = undefined;
-var windows: [3]Window = undefined;
-var zorder = [3]usize{ 0, 1, 2 };
+var windows: [NWIN]Window = undefined;
+var zorder = [NWIN]usize{ 0, 1, 2 };
 var inited = false;
 
 var drag: ?struct { win: usize, dx: i32, dy: i32 } = null;
@@ -90,15 +103,50 @@ fn allocSurface(w: u32, h: u32) ?gfx.Surface {
     };
 }
 
+// Content-buffer dimensions for a window whose outer box is ow x oh.
+fn contentW(ow: u32) u32 {
+    return ow - 2 * BORDER;
+}
+fn contentH(oh: u32) u32 {
+    return oh - TITLE_H - 2 * BORDER;
+}
+
 fn setupOnce() bool {
     if (inited) return true;
     const desc = console.screen_desc orelse return false;
     screen = gfx.Surface.fromConsoleFb(desc);
     back = allocSurface(screen.w, screen.h) orelse return false;
 
-    windows[0] = .{ .x = 40, .y = 60, .title = "Console", .surf = allocSurface(640, 384) orelse return false };
-    windows[1] = .{ .x = 720, .y = 80, .title = "System Monitor", .surf = allocSurface(264, 120) orelse return false };
-    windows[2] = .{ .x = 700, .y = 280, .title = "About Cedar", .surf = allocSurface(280, 96) orelse return false };
+    // Layout relative to the screen: the console takes the left column,
+    // the info panels stack in a right column.
+    const sw = screen.w;
+    const sh = screen.h;
+    const top = BAR_H + MARGIN;
+    const bottom = sh - DOCK_H - MARGIN;
+    const right_w: u32 = 340;
+    const left_x: i32 = @intCast(MARGIN);
+    const left_w = sw - right_w - 3 * MARGIN;
+    const right_x: i32 = @intCast(sw - right_w - MARGIN);
+    const usable_h = bottom - top;
+
+    windows[0] = .{
+        .x = left_x,
+        .y = @intCast(top),
+        .title = "Console",
+        .surf = allocSurface(contentW(left_w), contentH(usable_h)) orelse return false,
+    };
+    windows[1] = .{
+        .x = right_x,
+        .y = @intCast(top),
+        .title = "System Monitor",
+        .surf = allocSurface(contentW(right_w), contentH(190)) orelse return false,
+    };
+    windows[2] = .{
+        .x = right_x,
+        .y = @intCast(top + 190 + MARGIN),
+        .title = "About Cedar",
+        .surf = allocSurface(contentW(right_w), contentH(150)) orelse return false,
+    };
     inited = true;
     return true;
 }
@@ -115,9 +163,7 @@ pub fn start() void {
 
     // Redirect the console into its window synchronously, before the
     // compose thread (and, at boot, the shell) run — so the shell's
-    // first prompt lands in the window with no cross-thread race. Held
-    // under the console lock so a concurrent kprint can't tear the
-    // framebuffer/cursor state mid-switch.
+    // first prompt lands in the window with no cross-thread race.
     {
         const daif = log.acquireConsole();
         defer log.releaseConsole(daif);
@@ -140,20 +186,12 @@ pub fn start() void {
 }
 
 fn run() callconv(.c) void {
+    // The desktop is the only surface: this loop never exits.
     while (isRunning()) {
         handleMouse();
         compose();
         sched.sleep(1); // one tick = one frame
     }
-
-    // Console returns to the full screen (diagnostic mode), under the
-    // console lock. Typing 'gui' brings the desktop back.
-    {
-        const daif = log.acquireConsole();
-        defer log.releaseConsole(daif);
-        console.init(console.screen_desc.?);
-    }
-    log.kprint("Dropped to the diagnostic console. Type 'gui' for the desktop.\n");
 }
 
 fn handleMouse() void {
@@ -174,34 +212,41 @@ fn handleMouse() void {
     const mx: i32 = @intCast(st.x);
     const my: i32 = @intCast(st.y);
 
-    // Close box in the top bar drops to the diagnostic console.
-    if (my < BAR_H and mx >= screen.w - BAR_H) {
-        setRunning(false);
-        return;
-    }
-
-    // Dock buttons at the bottom raise + focus their window.
-    if (my >= back.h - DOCK_H) {
-        for (0..windows.len) |wi| {
-            const bx: i32 = @intCast(8 + wi * (DOCK_BTN_W + 6));
+    // Dock buttons toggle a window's visibility and raise it.
+    if (my >= @as(i32, @intCast(back.h - DOCK_H))) {
+        var wi: usize = 0;
+        while (wi < NWIN) : (wi += 1) {
+            const bx: i32 = @intCast(MARGIN + wi * (DOCK_BTN_W + DOCK_BTN_GAP));
             if (mx >= bx and mx < bx + @as(i32, @intCast(DOCK_BTN_W))) {
-                raise(wi);
+                if (windows[wi].visible and wi == focused()) {
+                    windows[wi].visible = false; // click the active one to hide
+                } else {
+                    windows[wi].visible = true;
+                    raise(wi);
+                }
                 return;
             }
         }
         return;
     }
 
-    // Hit-test windows, topmost first.
+    // Hit-test windows, topmost first (only visible ones).
     var zi: usize = zorder.len;
     while (zi > 0) {
         zi -= 1;
         const wi = zorder[zi];
         const w = &windows[wi];
+        if (!w.visible) continue;
         const ow: i32 = @intCast(w.outerW());
         const oh: i32 = @intCast(w.outerH());
         if (mx >= w.x and mx < w.x + ow and my >= w.y and my < w.y + oh) {
             raise(wi);
+            // The close button occupies the right of the title bar.
+            const cbx = w.x + ow - @as(i32, @intCast(TITLE_H));
+            if (my < w.y + @as(i32, @intCast(TITLE_H)) and mx >= cbx) {
+                w.visible = false;
+                return;
+            }
             if (my < w.y + @as(i32, @intCast(TITLE_H + BORDER))) {
                 drag = .{ .win = wi, .dx = mx - w.x, .dy = my - w.y };
             }
@@ -220,6 +265,16 @@ fn raise(wi: usize) void {
     zorder[zorder.len - 1] = wi;
 }
 
+// Topmost visible window.
+fn focused() usize {
+    var zi: usize = zorder.len;
+    while (zi > 0) {
+        zi -= 1;
+        if (windows[zorder[zi]].visible) return zorder[zi];
+    }
+    return zorder[zorder.len - 1];
+}
+
 var fmt_buf: [96]u8 = undefined;
 
 fn compose() void {
@@ -235,27 +290,28 @@ fn compose() void {
 
     drawSysmon();
 
-    for (zorder) |wi| drawWindow(wi);
+    for (zorder) |wi| {
+        if (windows[wi].visible) drawWindow(wi);
+    }
 
     drawDock();
-
-    // Top bar.
-    back.rect(0, 0, back.w, BAR_H, COL_BAR);
-    back.text(10, 10, "Cedar", COL_BAR_TEXT, null);
-    const t = timer.now();
-    const hz = timer.tickHz();
-    const s = std.fmt.bufPrint(&fmt_buf, "up {d}s | {d} cpus", .{ t / hz, smp.onlineCount() }) catch "";
-    back.text(@intCast(back.w - BAR_H - 8 - s.len * 8), 10, s, COL_BAR_TEXT, null);
-    back.rect(@intCast(back.w - BAR_H), 0, BAR_H, BAR_H, COL_CLOSE);
-    back.text(@intCast(back.w - BAR_H + 10), 10, "x", 0xffffff, null);
-
+    drawBar();
     drawCursor();
 
     screen.blit(0, 0, &back);
 }
 
-fn focused() usize {
-    return zorder[zorder.len - 1];
+fn drawBar() void {
+    back.rect(0, 0, back.w, BAR_H, COL_BAR);
+    back.rect(0, @intCast(BAR_H - 1), back.w, 1, COL_DOCK_EDGE);
+    back.rect(10, 9, 4, 12, COL_BAR_ACCENT); // little logo tick
+    back.text(20, 11, "Cedar OS", COL_BAR_TEXT, null);
+    const t = timer.now();
+    const hz = timer.tickHz();
+    const s = std.fmt.bufPrint(&fmt_buf, "up {d}:{d:0>2}  {d} cpu  {d} MiB free", .{
+        t / hz / 60, (t / hz) % 60, smp.onlineCount(), mem.freeMiB(),
+    }) catch "";
+    back.text(@intCast(back.w - 10 - s.len * 8), 11, s, COL_BAR_TEXT, null);
 }
 
 fn drawWindow(wi: usize) void {
@@ -263,68 +319,80 @@ fn drawWindow(wi: usize) void {
     const ow = w.outerW();
     const oh = w.outerH();
     const active = wi == focused();
+
+    // Drop shadow.
+    back.rect(w.x + SHADOW, w.y + SHADOW, ow, oh, COL_SHADOW);
+
     back.rect(w.x, w.y, ow, oh, COL_CHROME);
     back.rect(w.x + 1, w.y + 1, ow - 2, TITLE_H, if (active) COL_TITLE_FOCUS else COL_TITLE_BLUR);
-    back.text(w.x + 8, w.y + 7, w.title, if (active) COL_TITLE_TEXT else COL_TITLE_TEXT_BLUR, null);
+    back.text(w.x + 10, w.y + 8, w.title, if (active) COL_TITLE_TEXT else COL_TITLE_TEXT_BLUR, null);
+
+    // Close button at the right of the title bar.
+    const cbx = w.x + @as(i32, @intCast(ow - TITLE_H));
+    back.rect(cbx, w.y + 1, TITLE_H, TITLE_H - 1, if (active) COL_WCLOSE else COL_TITLE_BLUR);
+    back.text(cbx + 8, w.y + 8, "x", if (active) 0xffffff else COL_TITLE_TEXT_BLUR, null);
+
     const cy = w.y + @as(i32, @intCast(TITLE_H + BORDER)) - 1;
     if (wi == CONSOLE_WIN) {
-        // The shell writes this buffer via putChar/scroll under the
-        // console lock; take it around the read so the blit never
-        // captures a half-drawn glyph or a mid-scroll buffer.
         const daif = log.acquireConsole();
         defer log.releaseConsole(daif);
         back.blit(w.x + BORDER, cy, &w.surf);
     } else {
         back.blit(w.x + BORDER, cy, &w.surf);
     }
-    back.frame(w.x, w.y, ow, oh, if (active) 0x6fa080 else 0x3f5c4c);
+    back.frame(w.x, w.y, ow, oh, if (active) COL_FRAME_FOCUS else COL_FRAME_BLUR);
 }
 
 fn drawDock() void {
     const dy: i32 = @intCast(back.h - DOCK_H);
     back.rect(0, dy, back.w, DOCK_H, COL_DOCK);
-    back.rect(0, dy, back.w, 1, 0x3a5c48); // top edge highlight
+    back.rect(0, dy, back.w, 1, COL_DOCK_EDGE);
     const foc = focused();
-    for (windows, 0..) |w, wi| {
-        const bx: i32 = @intCast(8 + wi * (DOCK_BTN_W + 6));
-        const active = wi == foc;
-        back.rect(bx, dy + 4, DOCK_BTN_W, DOCK_H - 8, if (active) COL_DOCK_BTN_HI else COL_DOCK_BTN);
-        back.text(bx + 8, dy + 11, w.title, if (active) COL_TITLE_TEXT else COL_TITLE_TEXT_BLUR, null);
+    var wi: usize = 0;
+    while (wi < NWIN) : (wi += 1) {
+        const w = &windows[wi];
+        const bx: i32 = @intCast(MARGIN + wi * (DOCK_BTN_W + DOCK_BTN_GAP));
+        const col = if (!w.visible) COL_DOCK_BTN_OFF else if (wi == foc) COL_DOCK_BTN_HI else COL_DOCK_BTN;
+        back.rect(bx, dy + 6, DOCK_BTN_W, DOCK_H - 12, col);
+        // A running-indicator pip on the left of each button.
+        back.rect(bx + 6, dy + @as(i32, @intCast(DOCK_H / 2)) - 2, 4, 4, if (w.visible) COL_BAR_ACCENT else COL_TEXT_DIM);
+        const tc = if (w.visible) COL_TITLE_TEXT else COL_TEXT_DIM;
+        back.text(bx + 18, dy + @as(i32, @intCast(DOCK_H / 2)) - 4, w.title, tc, null);
     }
 }
 
 fn drawSysmon() void {
     const s = &windows[1].surf;
-    s.fill(0x101c14);
+    s.fill(COL_PANEL_BG);
     var buf: [64]u8 = undefined;
     const hz = timer.tickHz();
-    var y: i32 = 10;
-    const l1 = std.fmt.bufPrint(&buf, "uptime  {d} s", .{timer.now() / hz}) catch "";
-    s.text(10, y, l1, 0xd7e4d0, null);
-    y += 16;
-    const l2 = std.fmt.bufPrint(&buf, "free    {d} MiB", .{mem.freeMiB()}) catch "";
-    s.text(10, y, l2, 0xd7e4d0, null);
-    y += 16;
-    const l3 = std.fmt.bufPrint(&buf, "total   {d} MiB", .{mem.totalMiB()}) catch "";
-    s.text(10, y, l3, 0xd7e4d0, null);
-    y += 16;
-    const l4 = std.fmt.bufPrint(&buf, "cpus    {d} online", .{smp.onlineCount()}) catch "";
-    s.text(10, y, l4, 0xd7e4d0, null);
-    y += 16;
-    const l5 = std.fmt.bufPrint(&buf, "ticks   {d}", .{timer.now()}) catch "";
-    s.text(10, y, l5, 0xd7e4d0, null);
+    var y: i32 = 12;
+    const rows = [_]struct { k: []const u8, v: u64 }{
+        .{ .k = "uptime  ", .v = timer.now() / hz },
+        .{ .k = "free    ", .v = mem.freeMiB() },
+        .{ .k = "total   ", .v = mem.totalMiB() },
+        .{ .k = "cpus    ", .v = smp.onlineCount() },
+        .{ .k = "ticks   ", .v = timer.now() },
+    };
+    for (rows) |r| {
+        s.text(12, y, r.k, COL_TEXT_DIM, null);
+        const v = std.fmt.bufPrint(&buf, "{d}", .{r.v}) catch "";
+        s.text(12 + 8 * 8, y, v, COL_TEXT, null);
+        y += 18;
+    }
 }
 
 fn drawAbout() void {
     const s = &windows[2].surf;
-    s.fill(0x101c14);
-    s.text(10, 12, "Cedar OS 0.1 (aarch64)", 0xd7e4d0, null);
-    s.text(10, 30, "no bootloader, no mercy", 0x8fae9a, null);
-    s.text(10, 56, "drag titles - dock raises windows", 0x8fae9a, null);
-    s.text(10, 72, "x (top right) -> diagnostic console", 0x8fae9a, null);
+    s.fill(COL_PANEL_BG);
+    s.text(12, 12, "Cedar OS 0.1 (aarch64)", COL_TEXT, null);
+    s.text(12, 32, "no bootloader, no mercy", COL_TEXT_DIM, null);
+    s.text(12, 58, "drag titles to move windows", COL_TEXT_DIM, null);
+    s.text(12, 74, "x closes a window", COL_TEXT_DIM, null);
+    s.text(12, 90, "the dock reopens it", COL_TEXT_DIM, null);
 }
 
-// A simple 8x12 arrow, white with dark outline.
+// A simple 12x12 arrow, white with a dark outline.
 const cursor_rows = [12]u12{
     0b100000000000,
     0b110000000000,
@@ -347,8 +415,6 @@ fn drawCursor() void {
     for (cursor_rows, 0..) |bits, ry| {
         for (0..12) |rx| {
             if ((bits >> @intCast(11 - rx)) & 1 == 0) continue;
-            // outline: paint neighbors dark first pass isn't worth it;
-            // draw dark shadow one pixel offset, then white pixel.
             back.rect(cx + @as(i32, @intCast(rx)) + 1, cy + @as(i32, @intCast(ry)) + 1, 1, 1, 0x0a140e);
             back.rect(cx + @as(i32, @intCast(rx)), cy + @as(i32, @intCast(ry)), 1, 1, 0xffffff);
         }

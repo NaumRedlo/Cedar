@@ -173,7 +173,7 @@ export fn kmain(dtb_virt: usize) callconv(.c) noreturn {
             // Display: fw_cfg + ramfb bring the framebuffer console back.
             if (dt.findByCompatible("qemu,fw-cfg-mmio")) |fc| {
                 if (fwcfg.init(mmu.p2v(fc.addr))) {
-                    if (ramfb.init(1024, 768)) |fb| {
+                    if (ramfb.init(1280, 800)) |fb| {
                         console.init(fb);
                         log.console_enabled = true;
                         mouse.setScreen(@intCast(fb.width), @intCast(fb.height));
